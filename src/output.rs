@@ -25,6 +25,12 @@ pub(crate) enum StreamOutput<'a> {
     },
 }
 
+pub(crate) fn print_access_points_json(aps: &[AccessPoint]) -> Result<()> {
+    let text = serde_json::to_string_pretty(aps).context("serialize AP JSON")?;
+    println!("{text}");
+    Ok(())
+}
+
 pub(crate) fn print_access_points(aps: &[AccessPoint]) {
     for ap in aps {
         println!(

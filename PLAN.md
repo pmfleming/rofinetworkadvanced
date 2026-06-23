@@ -123,6 +123,33 @@ Behavior:
 
 Rofi note: plain rofi script mode usually consumes one command output at a time. The backend should still expose live JSONL snapshots first; the rofi integration can then either refresh from cached snapshots, use a helper process, or implement a controlled refresh loop.
 
+### 6b. Snapshot cache and first rofi bridge
+
+Add a small cache layer so the live stream can feed UIs that cannot consume an open-ended stream directly.
+
+Implemented cache files:
+
+```text
+$XDG_RUNTIME_DIR/nm-wifi-rofi/latest.json
+$XDG_RUNTIME_DIR/nm-wifi-rofi/status.json
+```
+
+Commands:
+
+```bash
+nm-wifi-rofi scan --stream --cache
+nm-wifi-rofi list --cached --json
+nm-wifi-rofi rofi
+```
+
+Initial rofi behavior:
+
+1. Render cached networks immediately.
+2. Render a rescan row.
+3. When rescan is selected, spawn `nm-wifi-rofi scan --stream --cache` in the background.
+4. Keep the UI responsive by reading cached snapshots instead of waiting for scan completion.
+5. Later, add connection actions and controlled rofi refresh behavior.
+
 ## 7. Parallel integration strategy
 
 Do not replace the existing chooser initially.

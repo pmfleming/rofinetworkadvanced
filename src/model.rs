@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use zvariant::OwnedObjectPath;
 
 pub(crate) const NM_AP_FLAGS_PRIVACY: u32 = 0x1;
@@ -9,6 +9,7 @@ pub(crate) const NM_AP_FLAGS_PRIVACY: u32 = 0x1;
 pub(crate) struct ScanStreamOptions {
     pub(crate) timeout: Duration,
     pub(crate) retries: u32,
+    pub(crate) cache: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -17,7 +18,7 @@ pub(crate) struct WifiDevice {
     pub(crate) iface: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct AccessPoint {
     pub(crate) ssid: String,
     pub(crate) active: bool,
@@ -26,15 +27,6 @@ pub(crate) struct AccessPoint {
     pub(crate) frequency: u32,
     pub(crate) bssid: String,
     pub(crate) last_seen: i32,
-}
-
-#[derive(Debug)]
-pub(crate) struct DeviceScanState {
-    pub(crate) device: WifiDevice,
-    pub(crate) before: i64,
-    pub(crate) completed: bool,
-    pub(crate) attempts: u32,
-    pub(crate) next_retry: Option<Instant>,
 }
 
 #[derive(Debug)]

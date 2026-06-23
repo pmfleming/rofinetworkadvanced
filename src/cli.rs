@@ -11,7 +11,14 @@ pub(crate) struct Cli {
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// List visible Wi-Fi networks as TSV.
-    List,
+    List {
+        /// Emit JSON instead of TSV.
+        #[arg(long)]
+        json: bool,
+        /// Use the latest cached live-scan snapshot if available.
+        #[arg(long)]
+        cached: bool,
+    },
     /// Request a scan, wait for completion, then list visible Wi-Fi networks as TSV.
     Scan {
         /// Scan completion timeout in seconds.
@@ -24,6 +31,18 @@ pub(crate) enum Command {
         #[arg(long)]
         strict: bool,
         /// Number of scan request retries when NetworkManager rejects a request.
+        #[arg(long, default_value_t = 2)]
+        retries: u32,
+        /// Write latest snapshot/status files under $XDG_RUNTIME_DIR/nm-wifi-rofi.
+        #[arg(long)]
+        cache: bool,
+    },
+    /// Emit a rofi script-mode menu backed by cached live-scan snapshots.
+    Rofi {
+        /// Background scan timeout in seconds when selecting rescan.
+        #[arg(long, default_value_t = 12)]
+        timeout: u64,
+        /// Background scan request retries when selecting rescan.
         #[arg(long, default_value_t = 2)]
         retries: u32,
     },

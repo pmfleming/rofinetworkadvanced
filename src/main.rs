@@ -6,12 +6,14 @@ use clap::Parser;
 use crate::cli::{Cli, Command};
 use crate::model::ScanStreamOptions;
 use crate::nm::Nm;
-use crate::output::print_access_points;
+use crate::output::{print_access_points, print_access_points_json};
 
+mod cache;
 mod cli;
 mod model;
 mod nm;
 mod output;
+mod rofi;
 mod stream;
 
 fn main() -> Result<()> {
@@ -19,23 +21,55 @@ fn main() -> Result<()> {
     let nm = Nm::new()?;
 
     match cli.command {
-        Command::List => print_access_points(&nm.list_access_points()?),
+        Command::List { json, cached } => print_network_list(&nm, json, cached)?,
         Command::Scan {
             timeout,
             stream,
             strict,
             retries,
-        } => run_scan(&nm, timeout, stream, strict, retries)?,
+            cache,
+        } => run_scan(&nm, timeout, stream, strict, retries, cache)?,
+        Command::Rofi { timeout, retries } => rofi::run(&nm, timeout, retries)?,
         Command::Active => print_active_ssid(&nm)?,
     }
 
     Ok(())
 }
 
-fn run_scan(nm: &Nm, timeout: u64, stream: bool, strict: bool, retries: u32) -> Result<()> {
+fn print_network_list(nm: &Nm, json: bool, cached: bool) -> Result<()> {
+    let networks = if cached {
+        cache::read_snapshot()?.map(|snapshot| snapshot.into_networks())
+    } else {
+        None
+    };
+    let networks = match networks {
+        Some(networks) => networks,
+        None => nm.list_access_points()?,
+    };
+
+    if json {
+        print_access_points_json(&networks)
+    } else {
+        print_access_points(&networks);
+        Ok(())
+    }
+}
+
+fn run_scan(
+    nm: &Nm,
+    timeout: u64,
+    stream: bool,
+    strict: bool,
+    retries: u32,
+    cache: bool,
+) -> Result<()> {
     let timeout = Duration::from_secs(timeout);
     if stream {
-        return nm.scan_stream(ScanStreamOptions { timeout, retries });
+        return nm.scan_stream(ScanStreamOptions {
+            timeout,
+            retries,
+            cache,
+        });
     }
 
     if let Err(err) = nm.scan(timeout) {
@@ -44,7 +78,12 @@ fn run_scan(nm: &Nm, timeout: u64, stream: bool, strict: bool, retries: u32) -> 
         }
         eprintln!("warning: scan failed: {err:#}; showing cached NetworkManager results");
     }
-    print_access_points(&nm.list_access_points()?);
+    let networks = nm.list_access_points()?;
+    if cache {
+        cache::write_snapshot(false, &networks)?;
+        cache::write_complete(false, networks.len())?;
+    }
+    print_access_points(&networks);
     Ok(())
 }
 
