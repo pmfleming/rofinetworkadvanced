@@ -9,6 +9,7 @@ use crate::model::AccessPoint;
 
 const CACHE_VERSION: u32 = 1;
 const CACHE_DIR_NAME: &str = "nm-wifi-rofi";
+const REVEAL_INTERVAL_MS: u128 = 700;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct CachedSnapshot {
@@ -22,6 +23,10 @@ pub(crate) struct CachedSnapshot {
 impl CachedSnapshot {
     pub(crate) fn scanning(&self) -> bool {
         self.scanning
+    }
+
+    pub(crate) fn updated_at_ms(&self) -> u128 {
+        self.updated_at_ms
     }
 
     pub(crate) fn networks_found(&self) -> usize {
@@ -41,6 +46,8 @@ impl CachedSnapshot {
 struct RevealState {
     active: bool,
     visible_count: usize,
+    last_reveal_ms: u128,
+    source_updated_at_ms: u128,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -65,11 +72,17 @@ pub(crate) fn reset_progressive_reveal() -> Result<()> {
         &RevealState {
             active: true,
             visible_count: 0,
+            last_reveal_ms: 0,
+            source_updated_at_ms: 0,
         },
     )
 }
 
-pub(crate) fn visible_network_count(scanning: bool, available: usize) -> Result<usize> {
+pub(crate) fn visible_network_count(
+    scanning: bool,
+    snapshot_updated_at_ms: u128,
+    available: usize,
+) -> Result<usize> {
     let Some(mut reveal) = read_reveal()? else {
         return Ok(available);
     };
@@ -77,10 +90,12 @@ pub(crate) fn visible_network_count(scanning: bool, available: usize) -> Result<
         return Ok(available);
     }
 
-    if available > reveal.visible_count {
-        reveal.visible_count += 1;
-    }
     reveal.visible_count = reveal.visible_count.min(available);
+    if should_reveal_next(&reveal, available) {
+        reveal.visible_count += 1;
+        reveal.last_reveal_ms = now_ms();
+        reveal.source_updated_at_ms = snapshot_updated_at_ms;
+    }
     reveal.active = scanning || reveal.visible_count < available;
     let visible_count = reveal.visible_count;
     write_json(reveal_path(), &reveal)?;
@@ -90,6 +105,12 @@ pub(crate) fn visible_network_count(scanning: bool, available: usize) -> Result<
 pub(crate) fn progressive_reveal_active(scanning: bool, available: usize) -> Result<bool> {
     Ok(read_reveal()?
         .is_some_and(|reveal| reveal.active && (scanning || reveal.visible_count < available)))
+}
+
+fn should_reveal_next(reveal: &RevealState, available: usize) -> bool {
+    available > reveal.visible_count
+        && (reveal.visible_count == 0
+            || now_ms().saturating_sub(reveal.last_reveal_ms) >= REVEAL_INTERVAL_MS)
 }
 
 pub(crate) fn write_empty_scanning_snapshot() -> Result<()> {

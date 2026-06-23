@@ -126,8 +126,11 @@ fn menu_networks(nm: &Nm, snapshot: Option<&CachedSnapshot>) -> Result<Vec<Acces
     let Some(snapshot) = snapshot else {
         return nm.list_access_points();
     };
-    let visible_count =
-        cache::visible_network_count(snapshot.scanning(), snapshot.networks_found())?;
+    let visible_count = cache::visible_network_count(
+        snapshot.scanning(),
+        snapshot.updated_at_ms(),
+        snapshot.networks_found(),
+    )?;
     Ok(snapshot.networks()[..visible_count].to_vec())
 }
 
