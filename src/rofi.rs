@@ -1,4 +1,5 @@
 use std::env;
+use std::fmt::Write as _;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
@@ -10,12 +11,14 @@ use crate::nm::Nm;
 const ACTION_RESCAN: &str = "rescan";
 const ACTION_STATUS: &str = "status";
 const ACTION_SSID_PREFIX: &str = "ssid:";
+const ACTION_SSID_HEX_PREFIX: &str = "ssid-hex:";
 const ROFI_CUSTOM_RESCAN_OR_REFRESH: &str = "10";
 const ROFI_CUSTOM_AUTO_REFRESH: &str = "11";
+const STALE_SESSION_GRACE_SECS: u64 = 2;
 
 pub(crate) fn run(nm: &Nm, timeout: u64, retries: u32) -> Result<()> {
     handle_action(nm, timeout, retries)?;
-    emit_menu(nm)
+    emit_menu(nm, timeout)
 }
 
 fn handle_action(nm: &Nm, timeout: u64, retries: u32) -> Result<()> {
@@ -37,7 +40,7 @@ fn rofi_return_code() -> Option<String> {
 }
 
 fn handle_rescan_hotkey(timeout: u64, retries: u32) -> Result<()> {
-    if active_session()?.is_some() {
+    if active_session(timeout)?.is_some() {
         return Ok(());
     }
     request_background_scan(timeout, retries)
@@ -55,13 +58,42 @@ fn request_background_scan(timeout: u64, retries: u32) -> Result<()> {
 }
 
 fn handle_network_action(nm: &Nm, action: &str) -> Result<()> {
-    let Some(ssid) = action.strip_prefix(ACTION_SSID_PREFIX) else {
+    let Some(ssid) = decode_ssid_action(action) else {
         return Ok(());
     };
-    if let Err(err) = crate::connect::connect_ssid(nm, ssid) {
+    let password = if nm.needs_wifi_password(&ssid)? {
+        let Some(password) = prompt_wifi_password(&ssid)? else {
+            cache::write_status("canceled", format!("Connection canceled for {ssid}"))?;
+            return Ok(());
+        };
+        Some(password)
+    } else {
+        None
+    };
+    if let Err(err) = crate::connect::connect_ssid_with_password(nm, &ssid, password.as_deref()) {
         eprintln!("warning: {err:#}");
     }
     Ok(())
+}
+
+fn prompt_wifi_password(ssid: &str) -> Result<Option<String>> {
+    let output = Command::new("rofi")
+        .args([
+            "-dmenu",
+            "-password",
+            "-p",
+            &format!("Password for {}", clean_label(ssid)),
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .context("prompt for Wi-Fi password with rofi")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let password = String::from_utf8_lossy(&output.stdout)
+        .trim_end_matches(['\r', '\n'])
+        .to_string();
+    Ok((!password.is_empty()).then_some(password))
 }
 
 fn start_background_scan(timeout: u64, retries: u32) -> Result<()> {
@@ -85,9 +117,9 @@ fn start_background_scan(timeout: u64, retries: u32) -> Result<()> {
     Ok(())
 }
 
-fn emit_menu(nm: &Nm) -> Result<()> {
+fn emit_menu(nm: &Nm, timeout: u64) -> Result<()> {
     print_rofi_header();
-    let session = active_session()?;
+    let session = active_session(timeout)?;
     let latest = if session.is_none() {
         cache::read_snapshot()?
     } else {
@@ -107,8 +139,12 @@ fn emit_menu(nm: &Nm) -> Result<()> {
     Ok(())
 }
 
-fn active_session() -> Result<Option<CachedSnapshot>> {
-    Ok(cache::read_session_snapshot()?.filter(CachedSnapshot::scanning))
+fn active_session(timeout: u64) -> Result<Option<CachedSnapshot>> {
+    let max_age_ms = u128::from(timeout.saturating_add(STALE_SESSION_GRACE_SECS)) * 1_000;
+    Ok(cache::read_session_snapshot()?.filter(|snapshot| {
+        snapshot.scanning()
+            && cache::now_ms().saturating_sub(snapshot.updated_at_ms()) <= max_age_ms
+    }))
 }
 
 fn print_rescan_row(progressive: bool, visible_count: usize) {
@@ -164,7 +200,7 @@ fn print_network_row(ap: &AccessPoint) {
         ap.strength,
         clean_label(&ap.ssid)
     );
-    print_row(label, format!("ssid:{}", ap.ssid));
+    print_row(label, encode_ssid_action(&ap.ssid));
 }
 
 fn print_rofi_header() {
@@ -176,23 +212,87 @@ fn print_rofi_header() {
 }
 
 fn print_row(label: impl AsRef<str>, info: impl AsRef<str>) {
-    println!("{}\0info\x1f{}", label.as_ref(), info.as_ref());
+    println!(
+        "{}\0info\x1f{}",
+        clean_label(label.as_ref()),
+        clean_label(info.as_ref())
+    );
 }
 
 fn print_disabled_row(label: impl AsRef<str>, info: impl AsRef<str>) {
     println!(
         "{}\0info\x1f{}\x1fnonselectable\x1ftrue",
-        label.as_ref(),
-        info.as_ref()
+        clean_label(label.as_ref()),
+        clean_label(info.as_ref())
     );
+}
+
+fn encode_ssid_action(ssid: &str) -> String {
+    let mut encoded = String::with_capacity(ACTION_SSID_HEX_PREFIX.len() + ssid.len() * 2);
+    encoded.push_str(ACTION_SSID_HEX_PREFIX);
+    for byte in ssid.as_bytes() {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
+}
+
+fn decode_ssid_action(action: &str) -> Option<String> {
+    if let Some(encoded) = action.strip_prefix(ACTION_SSID_HEX_PREFIX) {
+        return decode_hex(encoded).and_then(|bytes| String::from_utf8(bytes).ok());
+    }
+    action.strip_prefix(ACTION_SSID_PREFIX).map(str::to_string)
+}
+
+fn decode_hex(encoded: &str) -> Option<Vec<u8>> {
+    if !encoded.len().is_multiple_of(2) {
+        return None;
+    }
+    encoded
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|chunk| {
+            let hex = std::str::from_utf8(chunk).ok()?;
+            u8::from_str_radix(hex, 16).ok()
+        })
+        .collect()
 }
 
 fn clean_label(value: &str) -> String {
     value
         .chars()
         .map(|ch| match ch {
-            '\t' | '\n' | '\r' | '\0' => ' ',
+            '\t' | '\n' | '\r' | '\0' | '\x1f' => ' ',
             _ => ch,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ACTION_SSID_HEX_PREFIX, ACTION_SSID_PREFIX, clean_label, decode_ssid_action,
+        encode_ssid_action,
+    };
+
+    #[test]
+    fn ssid_action_encoding_round_trips_protocol_characters() {
+        let ssid = "Cafe\t\n\r\0\x1f☕";
+        let action = encode_ssid_action(ssid);
+
+        assert!(action.starts_with(ACTION_SSID_HEX_PREFIX));
+        assert_eq!(decode_ssid_action(&action).as_deref(), Some(ssid));
+    }
+
+    #[test]
+    fn legacy_ssid_actions_remain_supported() {
+        assert_eq!(
+            decode_ssid_action(&format!("{ACTION_SSID_PREFIX}Example")).as_deref(),
+            Some("Example")
+        );
+    }
+
+    #[test]
+    fn clean_label_removes_rofi_protocol_separators() {
+        assert_eq!(clean_label("a\tb\nc\rd\0e\x1ff"), "a b c d e f");
+    }
 }

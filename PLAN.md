@@ -149,7 +149,7 @@ Initial rofi behavior:
 2. Render a rescan row.
 3. When rescan is selected, spawn `nm-wifi-rofi scan --stream --cache` in the background.
 4. Keep the UI responsive by reading cached snapshots instead of waiting for scan completion.
-5. Network selection now calls the initial `nmcli` activation fallback and writes connection status into the cache.
+5. Network selection activates saved Wi-Fi profiles, passwordless visible networks, and WPA/WPA2/WPA3-Personal networks over NetworkManager D-Bus first, falls back to `nmcli` for unsupported WEP/enterprise/hidden edge cases, and writes connection status into the cache.
 6. Progressive scan refresh is exposed while a background scan is running: rescan creates a fresh `scan-session.json`, keeps `latest.json` only for menu startup/fallback, clears the visible list, polls the active NetworkManager AP table while waiting for scan signals, the disabled rescan row shows the same count as the visible network rows, rows are revealed from the active scan session at a 10ms display cadence, `Alt+R` starts/refreshes scanning, and the wrapper uses a rofi timeout custom callback to refresh from cache while the list repopulates.
 7. Later, replace the fallback with staged D-Bus activation.
 
@@ -220,7 +220,7 @@ Actions:
 - default: emit menu
 - `rescan`: request scan, wait for `LastScan`, emit menu
 - `portal`: launch captive portal browser
-- `connect:<ssid>`: initially shell out to `nmcli`
+- `connect:<ssid>`: use D-Bus activation for saved/passwordless/PSK networks, with `nmcli` fallback for unsupported edge cases
 
 ## 11. Optional full D-Bus connection activation
 
@@ -233,6 +233,8 @@ Needed pieces:
 - call `ActivateConnection`
 - create new Wi-Fi connection for unknown SSIDs
 - handle secrets/passwords correctly
+
+Current progress: saved Wi-Fi profiles are matched through device `AvailableConnections` when possible and activated with `NetworkManager.ActivateConnection`; visible passwordless networks use empty/partial `AddAndActivateConnection` settings so NetworkManager infers AP details; OWE is treated as passwordless; WPA/WPA2/WPA3-Personal networks use a rofi/CLI password and `802-11-wireless-security.psk` over `AddAndActivateConnection`; unsupported WEP/enterprise/hidden edge cases still use the `nmcli` fallback until richer D-Bus handling or a secret agent is implemented.
 
 This is more complex than listing/scanning and should not block the first version.
 

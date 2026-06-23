@@ -30,7 +30,9 @@ fn main() -> Result<()> {
             retries,
             cache,
         } => run_scan(&nm, timeout, stream, strict, retries, cache)?,
-        Command::Connect { ssid } => connect::connect_ssid(&nm, &ssid)?,
+        Command::Connect { ssid, password } => {
+            connect::connect_ssid_with_password(&nm, &ssid, password.as_deref())?
+        }
         Command::Rofi {
             timeout,
             retries,

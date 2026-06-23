@@ -1,4 +1,6 @@
 use std::process::Command;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -6,10 +8,16 @@ use crate::cache;
 use crate::nm::Nm;
 
 const NMCLI_CONNECT_TIMEOUT_SECS: &str = "30";
+const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
+const ACTIVATION_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-pub(crate) fn connect_ssid(nm: &Nm, ssid: &str) -> Result<()> {
+pub(crate) fn connect_ssid_with_password(
+    nm: &Nm,
+    ssid: &str,
+    password: Option<&str>,
+) -> Result<()> {
     cache::write_status("connecting", format!("Connecting to {ssid}…"))?;
-    match activate_saved_or_visible(ssid) {
+    match activate_saved_or_visible(nm, ssid, password) {
         Ok(message) => {
             cache::write_status("connected", message)?;
             refresh_cached_networks(nm)?;
@@ -22,16 +30,66 @@ pub(crate) fn connect_ssid(nm: &Nm, ssid: &str) -> Result<()> {
     }
 }
 
-fn activate_saved_or_visible(ssid: &str) -> Result<String> {
-    match nmcli(["connection", "up", "id", ssid]) {
-        Ok(_) => Ok(format!("Connected to saved network {ssid}")),
-        Err(saved_err) => match nmcli(["device", "wifi", "connect", ssid]) {
-            Ok(_) => Ok(format!("Connected to {ssid}")),
-            Err(connect_err) => bail!(
-                "saved profile activation failed: {saved_err:#}; wifi connect failed: {connect_err:#}"
+fn activate_saved_or_visible(nm: &Nm, ssid: &str, password: Option<&str>) -> Result<String> {
+    match nm.activate_saved_wifi_connection(ssid) {
+        Ok(true) => {
+            wait_for_active_ssid(nm, ssid)?;
+            Ok(format!("Connected to saved network {ssid} via D-Bus"))
+        }
+        Ok(false) => match nm.add_and_activate_wifi_connection(ssid, password) {
+            Ok(true) => {
+                wait_for_active_ssid(nm, ssid)?;
+                Ok(format!("Connected to Wi-Fi network {ssid} via D-Bus"))
+            }
+            Ok(false) => activate_with_nmcli_fallback(ssid, password),
+            Err(dbus_err) => match activate_with_nmcli_fallback(ssid, password) {
+                Ok(message) => Ok(format!(
+                    "{message} (D-Bus add/activate failed: {dbus_err:#})"
+                )),
+                Err(fallback_err) => bail!(
+                    "D-Bus add/activate failed: {dbus_err:#}; nmcli fallback failed: {fallback_err:#}"
+                ),
+            },
+        },
+        Err(dbus_err) => match activate_with_nmcli_fallback(ssid, password) {
+            Ok(message) => Ok(format!("{message} (D-Bus activation failed: {dbus_err:#})")),
+            Err(fallback_err) => bail!(
+                "D-Bus saved profile activation failed: {dbus_err:#}; nmcli fallback failed: {fallback_err:#}"
             ),
         },
     }
+}
+
+fn activate_with_nmcli_fallback(ssid: &str, password: Option<&str>) -> Result<String> {
+    match nmcli(["connection", "up", "id", ssid]) {
+        Ok(_) => Ok(format!(
+            "Connected to saved network {ssid} via nmcli fallback"
+        )),
+        Err(saved_err) => {
+            let connect_result = if let Some(password) = password {
+                nmcli(["device", "wifi", "connect", ssid, "password", password])
+            } else {
+                nmcli(["device", "wifi", "connect", ssid])
+            };
+            match connect_result {
+                Ok(_) => Ok(format!("Connected to {ssid} via nmcli fallback")),
+                Err(connect_err) => bail!(
+                    "saved profile activation failed: {saved_err:#}; wifi connect failed: {connect_err:#}"
+                ),
+            }
+        }
+    }
+}
+
+fn wait_for_active_ssid(nm: &Nm, ssid: &str) -> Result<()> {
+    let deadline = Instant::now() + ACTIVATION_TIMEOUT;
+    while Instant::now() < deadline {
+        if nm.active_ssid()?.as_deref() == Some(ssid) {
+            return Ok(());
+        }
+        sleep(ACTIVATION_POLL_INTERVAL);
+    }
+    bail!("timed out waiting for {ssid} to become active")
 }
 
 fn nmcli<const N: usize>(args: [&str; N]) -> Result<String> {

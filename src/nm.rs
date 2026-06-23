@@ -4,9 +4,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use zbus::blocking::{Connection, Proxy};
-use zvariant::{OwnedObjectPath, Value};
+use zvariant::{DynamicType, OwnedObjectPath, OwnedValue, Value};
 
-use crate::model::{AccessPoint, WifiDevice, security_label};
+use crate::model::{
+    AccessPoint, NM_AP_SEC_KEY_MGMT_PSK, NM_AP_SEC_KEY_MGMT_SAE, WifiDevice, ap_is_passwordless,
+    ap_supports_psk, security_label,
+};
 
 pub(crate) const NM_DEST: &str = "org.freedesktop.NetworkManager";
 pub(crate) const WIFI_IFACE: &str = "org.freedesktop.NetworkManager.Device.Wireless";
@@ -14,9 +17,14 @@ pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 const NM_PATH: &str = "/org/freedesktop/NetworkManager";
 const NM_IFACE: &str = "org.freedesktop.NetworkManager";
+const SETTINGS_PATH: &str = "/org/freedesktop/NetworkManager/Settings";
+const SETTINGS_IFACE: &str = "org.freedesktop.NetworkManager.Settings";
+const SETTINGS_CONNECTION_IFACE: &str = "org.freedesktop.NetworkManager.Settings.Connection";
 const DEVICE_IFACE: &str = "org.freedesktop.NetworkManager.Device";
 const AP_IFACE: &str = "org.freedesktop.NetworkManager.AccessPoint";
 const NM_DEVICE_TYPE_WIFI: u32 = 2;
+
+type ConnectionSettings = HashMap<String, HashMap<String, OwnedValue>>;
 
 pub(crate) struct Nm {
     conn: Connection,
@@ -73,6 +81,147 @@ impl Nm {
             return self
                 .access_point(&active_path, true)
                 .map(|ap| Some(ap.ssid));
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn activate_saved_wifi_connection(&self, ssid: &str) -> Result<bool> {
+        let Some((connection_path, device_path, specific_object)) =
+            self.saved_wifi_activation_target(ssid)?
+        else {
+            return Ok(false);
+        };
+        let nm = self.proxy(NM_PATH, NM_IFACE)?;
+        let _active_connection: OwnedObjectPath = nm
+            .call(
+                "ActivateConnection",
+                &(connection_path, device_path, specific_object),
+            )
+            .with_context(|| format!("ActivateConnection for saved Wi-Fi profile {ssid}"))?;
+        Ok(true)
+    }
+
+    pub(crate) fn add_and_activate_wifi_connection(
+        &self,
+        ssid: &str,
+        password: Option<&str>,
+    ) -> Result<bool> {
+        let Some((device, ap_path, ap)) = self.visible_access_point(ssid)? else {
+            return Ok(false);
+        };
+        let settings = if ap_is_passwordless(ap.flags, ap.wpa_flags, ap.rsn_flags) {
+            ConnectionSettings::new()
+        } else if ap_supports_psk(ap.wpa_flags, ap.rsn_flags) {
+            let Some(password) = password else {
+                return Ok(false);
+            };
+            psk_wifi_connection_settings(&ap, password)?
+        } else {
+            return Ok(false);
+        };
+
+        let nm = self.proxy(NM_PATH, NM_IFACE)?;
+        let _paths: (OwnedObjectPath, OwnedObjectPath) = nm
+            .call(
+                "AddAndActivateConnection",
+                &(settings, device.path, ap_path),
+            )
+            .with_context(|| format!("AddAndActivateConnection for Wi-Fi network {ssid}"))?;
+        Ok(true)
+    }
+
+    pub(crate) fn needs_wifi_password(&self, ssid: &str) -> Result<bool> {
+        if self.saved_wifi_activation_target(ssid)?.is_some() {
+            return Ok(false);
+        }
+        let Some((_device, _ap_path, ap)) = self.visible_access_point(ssid)? else {
+            return Ok(false);
+        };
+        Ok(!ap_is_passwordless(ap.flags, ap.wpa_flags, ap.rsn_flags)
+            && ap_supports_psk(ap.wpa_flags, ap.rsn_flags))
+    }
+
+    fn saved_wifi_activation_target(
+        &self,
+        ssid: &str,
+    ) -> Result<Option<(OwnedObjectPath, OwnedObjectPath, OwnedObjectPath)>> {
+        if let Some((device, ap_path, _ap)) = self.visible_access_point(ssid)?
+            && let Some(connection_path) =
+                self.saved_wifi_connection_for_ssid_on_device(ssid, &device)?
+        {
+            return Ok(Some((connection_path, device.path, ap_path)));
+        }
+
+        let Some(connection_path) = self.saved_wifi_connection_for_ssid(ssid)? else {
+            return Ok(None);
+        };
+        let Some(device) = self.wifi_devices()?.into_iter().next() else {
+            bail!("no Wi-Fi devices found");
+        };
+        Ok(Some((connection_path, device.path, root_object_path()?)))
+    }
+
+    fn saved_wifi_connection_for_ssid_on_device(
+        &self,
+        ssid: &str,
+        device: &WifiDevice,
+    ) -> Result<Option<OwnedObjectPath>> {
+        for path in self.available_connections(device)? {
+            if self.connection_matches_ssid(&path, ssid)? {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
+    }
+
+    fn saved_wifi_connection_for_ssid(&self, ssid: &str) -> Result<Option<OwnedObjectPath>> {
+        for path in self.saved_connections()? {
+            if self.connection_matches_ssid(&path, ssid)? {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
+    }
+
+    fn connection_matches_ssid(&self, path: &OwnedObjectPath, ssid: &str) -> Result<bool> {
+        let settings = self.connection_settings(path)?;
+        Ok(settings_match_wifi_ssid(&settings, ssid))
+    }
+
+    fn saved_connections(&self) -> Result<Vec<OwnedObjectPath>> {
+        let settings = self.proxy(SETTINGS_PATH, SETTINGS_IFACE)?;
+        settings
+            .call("ListConnections", &())
+            .context("ListConnections")
+    }
+
+    fn connection_settings(&self, path: &OwnedObjectPath) -> Result<ConnectionSettings> {
+        let connection = self.proxy_path(path, SETTINGS_CONNECTION_IFACE)?;
+        connection
+            .call("GetSettings", &())
+            .with_context(|| format!("GetSettings for {path}"))
+    }
+
+    fn available_connections(&self, device: &WifiDevice) -> Result<Vec<OwnedObjectPath>> {
+        let device_proxy = self.proxy_path(&device.path, DEVICE_IFACE)?;
+        device_proxy
+            .get_property("AvailableConnections")
+            .with_context(|| format!("read AvailableConnections for {}", device.iface))
+    }
+
+    fn visible_access_point(
+        &self,
+        ssid: &str,
+    ) -> Result<Option<(WifiDevice, OwnedObjectPath, AccessPoint)>> {
+        for device in self.wifi_devices()? {
+            for path in self.device_access_points(&device)? {
+                let Ok(ap) = self.access_point(&path, false) else {
+                    continue;
+                };
+                if ap.ssid == ssid {
+                    return Ok(Some((device, path, ap)));
+                }
+            }
         }
         Ok(None)
     }
@@ -146,6 +295,9 @@ impl Nm {
             frequency: ap.get_property("Frequency").unwrap_or(0),
             bssid: ap.get_property("HwAddress").unwrap_or_default(),
             last_seen: ap.get_property("LastSeen").unwrap_or(-1),
+            flags,
+            wpa_flags,
+            rsn_flags,
         })
     }
 
@@ -213,4 +365,172 @@ fn sorted_access_points(by_ssid: BTreeMap<String, AccessPoint>) -> Vec<AccessPoi
             .then_with(|| a.ssid.to_lowercase().cmp(&b.ssid.to_lowercase()))
     });
     aps
+}
+
+fn psk_wifi_connection_settings(ap: &AccessPoint, password: &str) -> Result<ConnectionSettings> {
+    let mut settings = ConnectionSettings::new();
+    settings.insert(
+        "802-11-wireless-security".to_string(),
+        HashMap::from([
+            (
+                "key-mgmt".to_string(),
+                owned_value(psk_key_mgmt(ap).to_string())?,
+            ),
+            ("psk".to_string(), owned_value(password.to_string())?),
+        ]),
+    );
+    Ok(settings)
+}
+
+fn psk_key_mgmt(ap: &AccessPoint) -> &'static str {
+    let flags = ap.wpa_flags | ap.rsn_flags;
+    if flags & NM_AP_SEC_KEY_MGMT_SAE != 0 && flags & NM_AP_SEC_KEY_MGMT_PSK == 0 {
+        "sae"
+    } else {
+        "wpa-psk"
+    }
+}
+
+fn owned_value<T>(value: T) -> Result<OwnedValue>
+where
+    T: Into<Value<'static>> + DynamicType,
+{
+    OwnedValue::try_from(Value::new(value)).context("create D-Bus variant value")
+}
+
+fn settings_match_wifi_ssid(settings: &ConnectionSettings, ssid: &str) -> bool {
+    let Some(wireless) = settings.get("802-11-wireless") else {
+        return false;
+    };
+    if settings
+        .get("connection")
+        .and_then(|connection| setting_string(connection, "type"))
+        .is_some_and(|connection_type| connection_type != "802-11-wireless")
+    {
+        return false;
+    }
+    wireless
+        .get("ssid")
+        .and_then(setting_bytes)
+        .is_some_and(|saved_ssid| ssid_bytes_match(&saved_ssid, ssid))
+}
+
+fn setting_string(settings: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
+    settings.get(key)?.try_clone().ok()?.try_into().ok()
+}
+
+fn setting_bytes(value: &OwnedValue) -> Option<Vec<u8>> {
+    value.try_clone().ok()?.try_into().ok()
+}
+
+fn ssid_bytes_match(saved_ssid: &[u8], ssid: &str) -> bool {
+    saved_ssid == ssid.as_bytes() || String::from_utf8_lossy(saved_ssid) == ssid
+}
+
+fn root_object_path() -> Result<OwnedObjectPath> {
+    OwnedObjectPath::try_from("/").context("create root object path")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConnectionSettings, psk_key_mgmt, psk_wifi_connection_settings, setting_string,
+        settings_match_wifi_ssid, ssid_bytes_match,
+    };
+    use crate::model::{AccessPoint, NM_AP_SEC_KEY_MGMT_PSK, NM_AP_SEC_KEY_MGMT_SAE};
+    use std::collections::HashMap;
+    use zvariant::{OwnedValue, Value};
+
+    #[test]
+    fn ssid_bytes_match_exact_utf8() {
+        assert!(ssid_bytes_match(b"Example", "Example"));
+    }
+
+    #[test]
+    fn ssid_bytes_match_lossy_decoded_names() {
+        assert!(ssid_bytes_match(&[0xff], "�"));
+    }
+
+    #[test]
+    fn settings_match_wireless_ssid() {
+        let settings = wifi_settings("Example", "802-11-wireless");
+
+        assert!(settings_match_wifi_ssid(&settings, "Example"));
+        assert!(!settings_match_wifi_ssid(&settings, "Other"));
+    }
+
+    #[test]
+    fn settings_reject_non_wireless_profiles() {
+        let settings = wifi_settings("Example", "ethernet");
+
+        assert!(!settings_match_wifi_ssid(&settings, "Example"));
+    }
+
+    #[test]
+    fn psk_wifi_settings_include_password_and_key_mgmt() {
+        let ap = test_ap(NM_AP_SEC_KEY_MGMT_PSK);
+        let settings = psk_wifi_connection_settings(&ap, "secret123").expect("settings");
+
+        assert_eq!(
+            settings
+                .get("802-11-wireless-security")
+                .and_then(|section| setting_string(section, "key-mgmt"))
+                .as_deref(),
+            Some("wpa-psk")
+        );
+        assert_eq!(
+            settings
+                .get("802-11-wireless-security")
+                .and_then(|section| setting_string(section, "psk"))
+                .as_deref(),
+            Some("secret123")
+        );
+    }
+
+    #[test]
+    fn sae_only_networks_use_sae_key_mgmt() {
+        assert_eq!(psk_key_mgmt(&test_ap(NM_AP_SEC_KEY_MGMT_SAE)), "sae");
+        assert_eq!(
+            psk_key_mgmt(&test_ap(NM_AP_SEC_KEY_MGMT_SAE | NM_AP_SEC_KEY_MGMT_PSK)),
+            "wpa-psk"
+        );
+    }
+
+    fn test_ap(rsn_flags: u32) -> AccessPoint {
+        AccessPoint {
+            ssid: "Example".to_string(),
+            active: false,
+            security: "WPA2/3".to_string(),
+            strength: 50,
+            frequency: 2412,
+            bssid: "00:11:22:33:44:55".to_string(),
+            last_seen: 0,
+            flags: 0,
+            wpa_flags: 0,
+            rsn_flags,
+        }
+    }
+
+    fn wifi_settings(ssid: &str, connection_type: &str) -> ConnectionSettings {
+        let mut settings = ConnectionSettings::new();
+        settings.insert(
+            "connection".to_string(),
+            HashMap::from([(
+                "type".to_string(),
+                owned_value(Value::new(connection_type.to_string())),
+            )]),
+        );
+        settings.insert(
+            "802-11-wireless".to_string(),
+            HashMap::from([(
+                "ssid".to_string(),
+                owned_value(Value::new(ssid.as_bytes().to_vec())),
+            )]),
+        );
+        settings
+    }
+
+    fn owned_value(value: Value<'_>) -> OwnedValue {
+        OwnedValue::try_from(value).expect("owned value")
+    }
 }

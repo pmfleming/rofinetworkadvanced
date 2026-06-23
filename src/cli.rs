@@ -41,6 +41,9 @@ pub(crate) enum Command {
     Connect {
         /// SSID to connect to.
         ssid: String,
+        /// Password for creating a new WPA/WPA2/WPA3-Personal connection over D-Bus.
+        #[arg(long)]
+        password: Option<String>,
     },
     /// Emit a rofi script-mode menu backed by cached live-scan snapshots.
     Rofi {

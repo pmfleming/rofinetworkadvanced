@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -10,6 +11,8 @@ use crate::model::AccessPoint;
 const CACHE_VERSION: u32 = 1;
 const CACHE_DIR_NAME: &str = "nm-wifi-rofi";
 const REVEAL_INTERVAL_MS: u128 = 10;
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct CachedSnapshot {
@@ -208,12 +211,26 @@ where
 {
     let parent = path.parent().context("cache path has no parent")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let tmp_path = path.with_extension("tmp");
+    let tmp_path = temp_path_for(&path)?;
     let text = serde_json::to_string_pretty(value).context("serialize cache JSON")?;
     fs::write(&tmp_path, format!("{text}\n"))
         .with_context(|| format!("write {}", tmp_path.display()))?;
     fs::rename(&tmp_path, &path)
         .with_context(|| format!("rename {} to {}", tmp_path.display(), path.display()))
+}
+
+fn temp_path_for(path: &std::path::Path) -> Result<PathBuf> {
+    let parent = path.parent().context("cache path has no parent")?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("cache path has no file name")?;
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    Ok(parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        counter
+    )))
 }
 
 fn snapshot_path() -> PathBuf {
@@ -239,9 +256,28 @@ fn cache_dir() -> PathBuf {
         .join(CACHE_DIR_NAME)
 }
 
-fn now_ms() -> u128 {
+pub(crate) fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::temp_path_for;
+
+    #[test]
+    fn temp_paths_are_unique_for_same_cache_path() {
+        let path = PathBuf::from("/tmp/nm-wifi-rofi/status.json");
+
+        let first = temp_path_for(&path).expect("first temp path");
+        let second = temp_path_for(&path).expect("second temp path");
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), path.parent());
+        assert_eq!(second.parent(), path.parent());
+    }
 }
