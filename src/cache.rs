@@ -28,9 +28,19 @@ impl CachedSnapshot {
         self.networks_found
     }
 
+    pub(crate) fn networks(&self) -> &[AccessPoint] {
+        &self.networks
+    }
+
     pub(crate) fn into_networks(self) -> Vec<AccessPoint> {
         self.networks
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct RevealState {
+    active: bool,
+    visible_count: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -47,6 +57,39 @@ impl CachedStatus {
     pub(crate) fn message(&self) -> &str {
         &self.message
     }
+}
+
+pub(crate) fn reset_progressive_reveal() -> Result<()> {
+    write_json(
+        reveal_path(),
+        &RevealState {
+            active: true,
+            visible_count: 0,
+        },
+    )
+}
+
+pub(crate) fn visible_network_count(scanning: bool, available: usize) -> Result<usize> {
+    let Some(mut reveal) = read_reveal()? else {
+        return Ok(available);
+    };
+    if !reveal.active {
+        return Ok(available);
+    }
+
+    if available > reveal.visible_count {
+        reveal.visible_count += 1;
+    }
+    reveal.visible_count = reveal.visible_count.min(available);
+    reveal.active = scanning || reveal.visible_count < available;
+    let visible_count = reveal.visible_count;
+    write_json(reveal_path(), &reveal)?;
+    Ok(visible_count)
+}
+
+pub(crate) fn progressive_reveal_active(scanning: bool, available: usize) -> Result<bool> {
+    Ok(read_reveal()?
+        .is_some_and(|reveal| reveal.active && (scanning || reveal.visible_count < available)))
 }
 
 pub(crate) fn write_empty_scanning_snapshot() -> Result<()> {
@@ -99,6 +142,10 @@ pub(crate) fn read_status() -> Result<Option<CachedStatus>> {
     read_json(status_path())
 }
 
+fn read_reveal() -> Result<Option<RevealState>> {
+    read_json(reveal_path())
+}
+
 fn write_status_record(status: CachedStatus) -> Result<()> {
     write_json(status_path(), &status)
 }
@@ -136,6 +183,10 @@ fn snapshot_path() -> PathBuf {
 
 fn status_path() -> PathBuf {
     cache_dir().join("status.json")
+}
+
+fn reveal_path() -> PathBuf {
+    cache_dir().join("reveal.json")
 }
 
 fn cache_dir() -> PathBuf {

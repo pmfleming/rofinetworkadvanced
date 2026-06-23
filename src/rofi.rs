@@ -48,6 +48,7 @@ fn selected_action() -> Option<String> {
 }
 
 fn request_background_scan(timeout: u64, retries: u32) -> Result<()> {
+    cache::reset_progressive_reveal()?;
     cache::write_empty_scanning_snapshot()?;
     cache::write_status("scanning", "Scanning… 0 networks found")?;
     start_background_scan(timeout, retries)
@@ -87,39 +88,47 @@ fn start_background_scan(timeout: u64, retries: u32) -> Result<()> {
 fn emit_menu(nm: &Nm) -> Result<()> {
     print_rofi_header();
     let snapshot = cache::read_snapshot()?;
-    print_rescan_row(snapshot.as_ref());
-    if snapshot
-        .as_ref()
-        .is_none_or(|snapshot| !snapshot.scanning())
-    {
+    let networks = menu_networks(nm, snapshot.as_ref())?;
+    let progressive = is_progressive_reveal(snapshot.as_ref())?;
+
+    print_rescan_row(snapshot.as_ref(), networks.len(), progressive);
+    if !progressive {
         print_status_row(snapshot.as_ref())?;
     }
-
-    for ap in menu_networks(nm, snapshot)? {
+    for ap in networks {
         print_network_row(&ap);
     }
     Ok(())
 }
 
-fn print_rescan_row(snapshot: Option<&CachedSnapshot>) {
-    match snapshot.filter(|snapshot| snapshot.scanning()) {
-        Some(snapshot) => print_disabled_row(scan_progress_label(snapshot), ACTION_STATUS),
-        None => print_row(" Rescan", ACTION_RESCAN),
+fn is_progressive_reveal(snapshot: Option<&CachedSnapshot>) -> Result<bool> {
+    match snapshot {
+        Some(snapshot) => {
+            cache::progressive_reveal_active(snapshot.scanning(), snapshot.networks_found())
+        }
+        None => Ok(false),
     }
 }
 
-fn scan_progress_label(snapshot: &CachedSnapshot) -> String {
-    format!(
-        " Scanning… {} networks found — Alt+R refreshes",
-        snapshot.networks_found()
-    )
+fn print_rescan_row(snapshot: Option<&CachedSnapshot>, visible_count: usize, progressive: bool) {
+    if progressive || snapshot.is_some_and(CachedSnapshot::scanning) {
+        print_disabled_row(scan_progress_label(visible_count), ACTION_STATUS);
+    } else {
+        print_row(" Rescan", ACTION_RESCAN);
+    }
 }
 
-fn menu_networks(nm: &Nm, snapshot: Option<CachedSnapshot>) -> Result<Vec<AccessPoint>> {
-    if let Some(snapshot) = snapshot {
-        return Ok(snapshot.into_networks());
-    }
-    nm.list_access_points()
+fn scan_progress_label(visible_count: usize) -> String {
+    format!(" Scanning… {visible_count} networks found")
+}
+
+fn menu_networks(nm: &Nm, snapshot: Option<&CachedSnapshot>) -> Result<Vec<AccessPoint>> {
+    let Some(snapshot) = snapshot else {
+        return nm.list_access_points();
+    };
+    let visible_count =
+        cache::visible_network_count(snapshot.scanning(), snapshot.networks_found())?;
+    Ok(snapshot.networks()[..visible_count].to_vec())
 }
 
 fn print_status_row(snapshot: Option<&CachedSnapshot>) -> Result<()> {
