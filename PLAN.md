@@ -150,7 +150,7 @@ Initial rofi behavior:
 3. When rescan is selected, spawn `nm-wifi-rofi scan --stream --cache` in the background.
 4. Keep the UI responsive by reading cached snapshots instead of waiting for scan completion.
 5. Network selection now calls the initial `nmcli` activation fallback and writes connection status into the cache.
-6. Progressive scan refresh is exposed while a background scan is running: rescan creates a fresh `scan-session.json`, keeps `latest.json` only for menu startup/fallback, clears the visible list, the disabled rescan row shows the same count as the visible network rows, rows are revealed from the active scan session at a 10ms display cadence, `Alt+R` starts/refreshes scanning, and the wrapper uses a rofi timeout custom callback to refresh from cache while the list repopulates.
+6. Progressive scan refresh is exposed while a background scan is running: rescan creates a fresh `scan-session.json`, keeps `latest.json` only for menu startup/fallback, clears the visible list, polls the active NetworkManager AP table while waiting for scan signals, the disabled rescan row shows the same count as the visible network rows, rows are revealed from the active scan session at a 10ms display cadence, `Alt+R` starts/refreshes scanning, and the wrapper uses a rofi timeout custom callback to refresh from cache while the list repopulates.
 7. Later, replace the fallback with staged D-Bus activation.
 
 ## 7. Parallel integration strategy

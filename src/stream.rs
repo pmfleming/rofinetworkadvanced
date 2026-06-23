@@ -234,7 +234,10 @@ impl<'a> ScanSession<'a> {
     fn recv_and_handle_event(&mut self) -> Result<bool> {
         match self.rx.recv_timeout(self.remaining_wait()) {
             Ok(event) => self.handle_event(event).map(|_| false),
-            Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.refresh_snapshot()?;
+                Ok(false)
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 emit_warning("D-Bus watcher channel disconnected", self.options.cache)?;
                 Ok(true)
