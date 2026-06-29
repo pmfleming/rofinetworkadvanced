@@ -11,7 +11,7 @@ use crate::nm::{Nm, split_nmcli_fields, split_nmcli_key_value as split_key_value
 struct ParityReport {
     summary: ParitySummary,
     checks: Vec<ParityCheck>,
-    nm_wifi: NmWifiSnapshot,
+    nm_api: NmApiSnapshot,
     nmcli: NmcliSnapshot,
 }
 
@@ -29,13 +29,13 @@ struct ParityCheck {
     area: &'static str,
     check: &'static str,
     status: &'static str,
-    nm_wifi: Option<String>,
+    nm_api: Option<String>,
     nmcli: Option<String>,
     detail: String,
 }
 
 #[derive(Serialize)]
-struct NmWifiSnapshot {
+struct NmApiSnapshot {
     status: WifiStatus,
     network_count: usize,
     active_network: Option<NetworkEntry>,
@@ -92,18 +92,18 @@ fn build_report(nm: &Nm) -> Result<ParityReport> {
         .filter(|network| network.last_connection.is_some())
         .count();
     let nmcli = nmcli_snapshot(status.device_iface.as_deref());
-    let nm_wifi = NmWifiSnapshot {
+    let nm_api = NmApiSnapshot {
         status,
         network_count: networks.len(),
         active_network,
         remembered_network_count,
     };
-    let checks = parity_checks(&nm_wifi, &nmcli);
+    let checks = parity_checks(&nm_api, &nmcli);
     let summary = summarize(&checks);
     Ok(ParityReport {
         summary,
         checks,
-        nm_wifi,
+        nm_api,
         nmcli,
     })
 }
@@ -231,9 +231,9 @@ fn parse_nmcli_ip4(output: &str) -> Option<NmcliIp4> {
     })
 }
 
-fn parity_checks(nm_wifi: &NmWifiSnapshot, nmcli: &NmcliSnapshot) -> Vec<ParityCheck> {
+fn parity_checks(nm_api: &NmApiSnapshot, nmcli: &NmcliSnapshot) -> Vec<ParityCheck> {
     let mut checks = Vec::new();
-    let status = &nm_wifi.status;
+    let status = &nm_api.status;
     let nmcli_active = nmcli.active_wifi.as_ref();
     checks.push(compare_optional(
         "active",
@@ -265,7 +265,7 @@ fn parity_checks(nm_wifi: &NmWifiSnapshot, nmcli: &NmcliSnapshot) -> Vec<ParityC
     checks.push(check_bool(
         "cache",
         "active network in enriched list",
-        nm_wifi
+        nm_api
             .active_network
             .as_ref()
             .is_some_and(|network| network.access_point.active),
@@ -274,7 +274,7 @@ fn parity_checks(nm_wifi: &NmWifiSnapshot, nmcli: &NmcliSnapshot) -> Vec<ParityC
     checks.push(check_bool(
         "cache",
         "remembered connection details",
-        nm_wifi.remembered_network_count > 0,
+        nm_api.remembered_network_count > 0,
         "at least one network should expose last_connection after status/connect caching",
     ));
     checks
@@ -283,15 +283,15 @@ fn parity_checks(nm_wifi: &NmWifiSnapshot, nmcli: &NmcliSnapshot) -> Vec<ParityC
 fn compare_optional(
     area: &'static str,
     check: &'static str,
-    nm_wifi: Option<String>,
+    nm_api: Option<String>,
     nmcli: Option<String>,
 ) -> ParityCheck {
-    match (&nm_wifi, &nmcli) {
+    match (&nm_api, &nmcli) {
         (Some(left), Some(right)) if normalize(left) == normalize(right) => ParityCheck {
             area,
             check,
             status: "pass",
-            nm_wifi,
+            nm_api,
             nmcli,
             detail: "values match".to_string(),
         },
@@ -299,15 +299,15 @@ fn compare_optional(
             area,
             check,
             status: "fail",
-            nm_wifi,
+            nm_api,
             nmcli,
-            detail: "nm-wifi and nmcli disagree".to_string(),
+            detail: "nm-api and nmcli disagree".to_string(),
         },
         (None, None) => ParityCheck {
             area,
             check,
             status: "unknown",
-            nm_wifi,
+            nm_api,
             nmcli,
             detail: "neither tool reported a value".to_string(),
         },
@@ -315,7 +315,7 @@ fn compare_optional(
             area,
             check,
             status: "warn",
-            nm_wifi,
+            nm_api,
             nmcli,
             detail: "only one tool reported a value".to_string(),
         },
@@ -339,7 +339,7 @@ fn compare_signal(status: &WifiStatus, nmcli_active: Option<&NmcliWifiRow>) -> P
             area: "active",
             check: "signal",
             status: "pass",
-            nm_wifi: Some(left.to_string()),
+            nm_api: Some(left.to_string()),
             nmcli: Some(right.to_string()),
             detail: "signal is within 15 percentage points".to_string(),
         },
@@ -347,7 +347,7 @@ fn compare_signal(status: &WifiStatus, nmcli_active: Option<&NmcliWifiRow>) -> P
             area: "active",
             check: "signal",
             status: "warn",
-            nm_wifi: Some(left.to_string()),
+            nm_api: Some(left.to_string()),
             nmcli: Some(right.to_string()),
             detail: "signal differs; scan timing may explain this".to_string(),
         },
@@ -376,7 +376,7 @@ fn check_bool(
         area,
         check,
         status: if passed { "pass" } else { "warn" },
-        nm_wifi: Some(passed.to_string()),
+        nm_api: Some(passed.to_string()),
         nmcli: None,
         detail: detail.to_string(),
     }
@@ -413,11 +413,11 @@ fn print_text_report(report: &ParityReport) {
     );
     for check in &report.checks {
         println!(
-            "{}\t{}\t{}\tnm-wifi={}\tnmcli={}\t{}",
+            "{}\t{}\t{}\tnm-api={}\tnmcli={}\t{}",
             check.status,
             check.area,
             check.check,
-            check.nm_wifi.as_deref().unwrap_or("—"),
+            check.nm_api.as_deref().unwrap_or("—"),
             check.nmcli.as_deref().unwrap_or("—"),
             check.detail
         );

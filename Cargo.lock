@@ -532,7 +532,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nm-wifi"
+name = "nm-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",

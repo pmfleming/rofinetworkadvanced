@@ -49,7 +49,6 @@ pub fn run() -> Result<()> {
         Command::Diagnose(options) => {
             with_nm(|nm| crate::diagnose::print_diagnosis(nm, options.json))?
         }
-        Command::Active => with_nm(actions::print_active_ssid)?,
         Command::ContractFixture => crate::contract::print_shelllist_contract_fixture()?,
     }
 

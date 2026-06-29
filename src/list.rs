@@ -5,11 +5,11 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::nm::Nm;
-use crate::output::{print_access_points, print_access_points_json, print_network_entries_json};
+use crate::output::{print_access_points_json, print_network_entries_json};
 use crate::{cache, model::AccessPoint};
 
 pub(crate) fn print_network_list(
-    json: bool,
+    _json: bool,
     cached: bool,
     refresh_cache: bool,
     refresh_timeout: u64,
@@ -17,7 +17,6 @@ pub(crate) fn print_network_list(
     log_file: &Option<std::path::PathBuf>,
 ) -> Result<()> {
     tracing::info!(
-        json,
         cached,
         refresh_cache,
         refresh_timeout,
@@ -30,7 +29,7 @@ pub(crate) fn print_network_list(
             if refresh_cache {
                 spawn_cache_refresh(refresh_timeout, verbose, log_file.as_deref());
             }
-            return print_networks(&networks, json);
+            return print_networks(&networks);
         }
 
         if refresh_cache {
@@ -40,7 +39,7 @@ pub(crate) fn print_network_list(
             );
             let nm = Nm::new()?;
             let networks = scan_and_cache(&nm, Duration::from_secs(refresh_timeout))?;
-            return print_networks(&networks, json);
+            return print_networks(&networks);
         }
     }
 
@@ -49,12 +48,12 @@ pub(crate) fn print_network_list(
     if refresh_cache {
         spawn_cache_refresh(refresh_timeout, verbose, log_file.as_deref());
     }
-    print_networks(&networks, json)
+    print_networks(&networks)
 }
 
 pub(crate) fn print_enriched_network_list(
     nm: &Nm,
-    json: bool,
+    _json: bool,
     cached: bool,
     refresh_cache: bool,
     refresh_timeout: u64,
@@ -72,26 +71,11 @@ pub(crate) fn print_enriched_network_list(
     )?;
     let mut networks = nm.network_entries_for_access_points(access_points)?;
     cache::attach_connection_details(&mut networks);
-    if json {
-        print_network_entries_json(&networks)
-    } else {
-        print_access_points(
-            &networks
-                .into_iter()
-                .map(|network| network.access_point)
-                .collect::<Vec<_>>(),
-        );
-        Ok(())
-    }
+    print_network_entries_json(&networks)
 }
 
-fn print_networks(networks: &[AccessPoint], json: bool) -> Result<()> {
-    if json {
-        print_access_points_json(networks)
-    } else {
-        print_access_points(networks);
-        Ok(())
-    }
+fn print_networks(networks: &[AccessPoint]) -> Result<()> {
+    print_access_points_json(networks)
 }
 
 fn load_networks(

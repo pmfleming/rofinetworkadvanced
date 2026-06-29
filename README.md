@@ -1,60 +1,59 @@
-# nm-wifi
+# nm-api
 
-UI-agnostic NetworkManager D-Bus Wi-Fi helper.
+Local JSON/JSONL NetworkManager adapter for Shelllist and similar frontends.
 
-`nm-wifi` provides scanning, cached JSON/JSONL output, connection activation, saved-profile management, and active-network reporting for frontends such as Shelllist. Rofi-specific menu rendering has been removed; Shelllist is now the intended desktop Wi-Fi UI.
+`nm-api` is not a human Wi-Fi menu. It exposes a frontend-facing protocol over a command transport while Shelllist owns UI, prompts, forms, and presentation.
 
-Implemented commands:
+Stable responses use protocol envelope v1:
 
-```bash
-nm-wifi list
-nm-wifi list --cached --json
-nm-wifi networks --cached --json
-nm-wifi scan --timeout 20
-nm-wifi scan --ssid Cafe --timeout 20
-nm-wifi scan --stream --cache --timeout 20 --retries 2
-nm-wifi scan --strict --timeout 20
-nm-wifi connect <ssid>
-nm-wifi connect <ssid> --password <password>
-echo <password> | nm-wifi connect <ssid> --password-stdin
-nm-wifi connect <ssid> --bssid <bssid>
-nm-wifi connect <ssid> --hidden --key-mgmt wpa-psk --password <password>
-nm-wifi connect <ssid> --hidden --key-mgmt open
-nm-wifi connect <ssid> --hidden --key-mgmt owe
-nm-wifi connect <ssid> --password <wep-key> --wep-key-type key
-nm-wifi connect-target '{"ssid":"Cafe","ssid_bytes":[67,97,102,101],"path":"/org/..."}' --json
-nm-wifi connect-target '{"ssid":"Cafe","ssid_bytes":[67,97,102,101],"path":"/org/..."}' --password-stdin --json
-nm-wifi saved --json
-nm-wifi profile delete <path>
-nm-wifi profile autoconnect <path> true|false
-nm-wifi profile mac-randomization <path> true|false
-nm-wifi profile share <path> --json
-nm-wifi profile send-hostname <path> true|false
-nm-wifi status --json
-nm-wifi disconnect --json
-nm-wifi connectivity --json
-nm-wifi diagnose --json
-nm-wifi active
+```json
+{
+  "protocol": "nm-api",
+  "version": 1,
+  "ok": true,
+  "data": {}
+}
 ```
 
-`networks --json` enriches visible networks with saved-profile matches, exact AP/device identity, grouped exact `access_points`, AP metadata (channel/band/mode/bitrate/security flags), an `auth` descriptor, and backend connection capabilities for Shelllist/frontends. Capabilities distinguish networks that can connect immediately (`can_connect_now`), PSK/WEP networks that require a caller-supplied password (`can_connect_with_password`), and enterprise networks that require structured credentials (`can_connect_with_credentials`). `connect-target` accepts one of those JSON objects directly, preserving exact SSID bytes, AP object paths, BSSIDs, device identity, optional connection name, private/user-scope metadata, `key_mgmt` hints for hidden/ambiguous targets, and optional `profile` settings (autoconnect, priority, metered state, MAC policy, DHCP hostname, and full IPv4/IPv6 address/gateway/DNS/route data). Add --json to `connect` or `connect-target` to emit a structured connection result with connectivity state and portal recommendation.
+Failures use typed errors:
 
-`scan --stream` emits JSON Lines progress events and repeated enriched snapshots as NetworkManager adds/removes access points. Add `--cache` to write `latest.json`, `scan-session.json`, and `status.json` under `$XDG_RUNTIME_DIR/nm-wifi`. Successful connects and `status --json` also cache `active-status.json`, update remembered per-network details in `known-connections.json`, and merge the active access point into `latest.json` so Shelllist can show connection details immediately after activation and when revisiting previously connected networks. `scan --ssid <ssid>` may be repeated for targeted scans used by Shelllist hidden-network flows.
+```json
+{
+  "protocol": "nm-api",
+  "version": 1,
+  "ok": false,
+  "error": { "code": "secret-required", "message": "...", "details": {} },
+  "data": {}
+}
+```
 
-`status --json` reports the active Wi-Fi access point, matching saved profile, connectivity, IPv4 details, wireless link details, and profile privacy state where NetworkManager exposes them. IPv4 address, gateway, and DNS are read from NetworkManager D-Bus IP configuration data first; `nmcli device show` is only used as a last-resort fill-in when D-Bus data is incomplete. `diagnose --json` compares the Shelllist-facing active-network and cache fields with live `nmcli` output; see `docs/nmcli-parity.md`. `profile mac-randomization` toggles per-profile stable randomized MAC vs device MAC. `profile send-hostname` toggles whether DHCP sends this device's hostname. `profile share <path> --json` returns a standard Wi-Fi QR payload only when the saved profile is shareable: open networks, or WPA/WEP profiles whose stored secret is readable through NetworkManager `GetSecrets`; enterprise and OWE profiles are reported as unavailable. `disconnect --json` deactivates the active Wi-Fi connection if one exists.
+Current Wi-Fi commands:
 
-Use `--password-stdin` for UI callers so passwords are not exposed in process arguments. Failed JSON connection attempts emit `status: "error"` plus a typed `reason` such as `secret-required`, `authorization-required`, `unsupported-auth`, `validation-error`, `timeout`, or `activation-failed`, then exit nonzero.
+```bash
+nm-api networks [--cached] [--refresh-cache]
+nm-api scan [--stream] [--cache] [--strict] [--timeout <seconds>] [--retries <count>] [--ifname <iface>] [--ssid <ssid>...]
+nm-api connect <ssid> [--password-stdin] [--bssid <bssid>] [--hidden] [--key-mgmt <hint>] [--wep-key-type key|phrase]
+nm-api connect-target <target-json> [--password-stdin] [--wep-key-type key|phrase]
+nm-api saved
+nm-api profile delete <path>
+nm-api profile autoconnect <path> true|false
+nm-api profile mac-randomization <path> true|false
+nm-api profile share <path>
+nm-api profile send-hostname <path> true|false
+nm-api status
+nm-api disconnect
+nm-api connectivity
+```
 
-Prefer `--json` for stable machine-readable output. JSON includes display SSIDs plus raw `ssid_bytes`; plain TSV output is intended for humans and escapes tabs, newlines, backslashes, NUL, and control characters.
+Compatibility during migration:
 
-Connection activation uses NetworkManager D-Bus for saved Wi-Fi profiles, open/OWE passwordless visible networks, hidden SSIDs with explicit `key_mgmt` hints, WEP networks, WPA/WPA2/WPA3-Personal networks, and WPA-Enterprise/802.1X profile creation via structured `enterprise` target credentials. When a caller supplies a new password/credential for a visible saved network, nm-wifi clones compatible saved profile settings, replaces the relevant secret/security settings, and uses D-Bus add-and-activate so advanced profile options are preserved without mutating the existing profile. `nmcli` remains a fallback while nm-wifi grows toward nmcli Wi-Fi behavior parity. `connectivity --json` exposes NetworkManager connectivity state for frontends.
+- `--json` is accepted as a no-op.
+- `list` exists as an access-point listing alias but is not the primary Shelllist API.
+- `diagnose` and `contract-fixture` are debug/unstable surfaces.
 
-Logging:
+Secrets must use `--password-stdin`; argv password transport has been removed.
 
-- Detailed logs are written by default to `$XDG_RUNTIME_DIR/nm-wifi/nm-wifi.log` with private file permissions.
-- Use `--log-file <path>` or `NM_WIFI_LOG_FILE=<path>` to choose another file.
-- Use `-v`/`-vv` for more stderr logging; use `NM_WIFI_LOG` and `NM_WIFI_STDERR_LOG` for tracing filters.
-- Passwords are redacted from logged `nmcli` arguments.
+Runtime files and logs live under `$XDG_RUNTIME_DIR/nm-api` by default. Logging environment variables are `NM_API_LOG_FILE`, `NM_API_LOG`, and `NM_API_STDERR_LOG`.
 
 Development:
 
@@ -63,24 +62,4 @@ nix develop path:.
 just check
 ```
 
-Or without `just`:
-
-```bash
-cargo fmt -- --check
-cargo clippy -- -D warnings
-cargo test
-```
-
-Or without entering the shell:
-
-```bash
-nix develop path:. -c just check
-```
-
-If you use direnv:
-
-```bash
-direnv allow
-```
-
-See [PLAN.md](./PLAN.md).
+See [PLAN.md](./PLAN.md) for the migration plan.

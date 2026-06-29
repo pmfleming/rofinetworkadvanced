@@ -38,18 +38,6 @@ impl Nm {
         Ok(Some(WifiDevice { path, iface }))
     }
 
-    pub(crate) fn active_ssid(&self) -> Result<Option<String>> {
-        for device in self.wifi_devices()? {
-            let Some(active_path) = self.active_access_point(&device)? else {
-                continue;
-            };
-            return self
-                .access_point(&device, &active_path, true)
-                .map(|ap| Some(ap.ssid));
-        }
-        Ok(None)
-    }
-
     pub(crate) fn active_ssid_matches(&self, target: &WifiConnectTarget) -> Result<bool> {
         for device in self.wifi_devices_for_target(target)? {
             if self.active_ssid_matches_on_device(&device, target)? {

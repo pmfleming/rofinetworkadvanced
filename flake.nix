@@ -1,5 +1,5 @@
 {
-  description = "NetworkManager D-Bus Wi-Fi helper";
+  description = "NetworkManager JSON/JSONL API adapter";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -11,17 +11,17 @@
     {
       packages = forAllSystems (system: pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
-          pname = "nm-wifi";
+          pname = "nm-api";
           version = "0.1.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = with pkgs; [ makeWrapper pkg-config ];
           postInstall = ''
-            wrapProgram $out/bin/nm-wifi --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.iw ]}
+            wrapProgram $out/bin/nm-api --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.iw ]}
           '';
           meta = {
-            description = "NetworkManager D-Bus Wi-Fi helper";
-            mainProgram = "nm-wifi";
+            description = "NetworkManager JSON/JSONL API adapter";
+            mainProgram = "nm-api";
             platforms = pkgs.lib.platforms.linux;
           };
         };
@@ -30,8 +30,8 @@
       apps = forAllSystems (system: pkgs: {
         default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/nm-wifi";
-          meta.description = "Run the nm-wifi NetworkManager helper";
+          program = "${self.packages.${system}.default}/bin/nm-api";
+          meta.description = "Run the nm-api NetworkManager adapter";
         };
       });
 

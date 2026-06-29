@@ -1,149 +1,161 @@
-# nm-wifi plan
+# nm-api migration plan
 
-Goal: provide a stable, UI-agnostic NetworkManager Wi-Fi backend API for Shelllist and similar frontends.
+Goal: `nm-api` is a local JSON/JSONL NetworkManager adapter for Shelllist and any future GUI/TUI clients. Shelllist owns UI, prompting, presentation, and user flows. `nm-api` owns NetworkManager behavior and the stable machine protocol.
 
-`nm-wifi` is trying to reach nmcli-equivalent Wi-Fi behavior for Shelllist/frontends, while keeping a stable JSON/backend API instead of copying nmcli's human-facing command UX. The nmcli/NetworkManager sources are a behavior reference; new work should favor structured JSON contracts, exact connect targets, and D-Bus implementation paths over broad text CLI compatibility.
+This is scratch-your-own-itch software: the API may grow from Wi-Fi into broader NetworkManager surfaces as needed.
 
-## Scope
+## Scope boundary
 
-`nm-wifi` owns NetworkManager-specific behavior:
+`nm-api` owns backend behavior:
 
-- Wi-Fi device discovery.
-- access-point list and scan requests.
-- cached snapshots and scan status under `$XDG_RUNTIME_DIR/nm-wifi`.
-- JSON and JSON Lines machine-readable output.
-- saved-profile listing, delete, and autoconnect changes.
-- connection activation over D-Bus, growing toward nmcli Wi-Fi/auth parity, with `nmcli` fallback for remaining edge cases.
-- SSID byte preservation for non-UTF-8/hidden networks.
-- logging and structured backend status.
+- NetworkManager D-Bus integration.
+- Wi-Fi device discovery, scans, status, and activation.
+- Saved-profile listing and mutation.
+- Connectivity/portal state.
+- Cache files under `$XDG_RUNTIME_DIR/nm-api`.
+- Structured JSON/JSONL protocol responses.
+- Typed validation and operation errors.
+- Debug/parity probes against `nmcli` where useful.
 
-Shelllist owns UI behavior: prompts, choice presentation, portal/browser UX, and human interaction.
+Shelllist owns interface behavior:
 
-## Shelllist API parity plan from nmcli review
+- Prompts and credential forms.
+- List/detail rendering.
+- Keyboard/mouse flow.
+- Captive-portal browser UX.
+- Deciding which API action to run from user intent.
 
-The nmcli codebase is a reference for correct NetworkManager behavior, not a request to copy nmcli's command UX. Implement the following as JSON/backend capabilities.
+## Protocol direction
 
-1. **Exact AP/device connect targets**
-   - Include AP object path, BSSID, device path, and interface name in JSON network records.
-   - `connect-target` must preserve and honor these fields.
-   - Shelllist should pass the target object back unchanged.
+Stable frontend-facing output is JSON-only. Stream output remains JSON Lines. Human TSV/plain output is removed from the supported surface.
 
-2. **Saved-profile compatibility matching**
-   - Use `AvailableConnections` for visible AP activation.
-   - Match saved profiles against AP/device compatibility, not only SSID bytes.
-   - Account for saved BSSID restrictions and device constraints.
+Every stable response uses the v1 envelope:
 
-3. **Password supplied for existing profiles**
-   - If Shelllist supplies a password, do not blindly activate stale saved secrets first.
-   - Prefer password-aware update/add-and-activate behavior.
-   - Avoid persistent broken profiles or clean them up on failure.
+```json
+{
+  "protocol": "nm-api",
+  "version": 1,
+  "ok": true,
+  "data": {}
+}
+```
 
-4. **Structured secret-required / credential-required / unsupported results**
-   - Do not prompt in `nm-wifi`.
-   - Return machine-readable states and auth descriptors so Shelllist can render the right password or enterprise credential UI.
-   - Treat `unsupported-auth` as a temporary gap to shrink toward nmcli Wi-Fi/auth parity.
+Failures use the same envelope shape with typed errors:
 
-5. **Validation at the backend boundary**
-   - Validate SSID byte length (`1..=32`).
-   - Validate BSSID syntax.
-   - Reject inconsistent exact AP/device target fields.
-   - Provide clear JSON/plain errors.
+```json
+{
+  "protocol": "nm-api",
+  "version": 1,
+  "ok": false,
+  "error": {
+    "code": "validation-error",
+    "message": "...",
+    "details": {}
+  },
+  "data": {}
+}
+```
 
-6. **Device-aware scans**
-   - Internally support targeted scans by device and SSID bytes.
-   - Expose this through stable JSON/cache behavior as Shelllist needs it, not as a broad nmcli-style command set.
+Shelllist must check `protocol == "nm-api"` and `version == 1` before relying on fields.
 
-7. **Raw APs plus grouped networks**
-   - Preserve grouped `networks --json` for Shelllist list UI.
-   - Also expose exact AP identity in each entry so Shelllist can connect to a specific AP/BSSID/band.
+## Stable v1 commands during migration
 
-8. **Enriched AP metadata**
-   - Add nmcli-like machine fields where useful for Shelllist:
-     - SSID hex.
-     - channel/band.
-     - mode.
-     - bitrate/bandwidth.
-     - detailed security labels.
+Current transport remains command-oriented while the boundary hardens:
 
-9. **Connection attributes as target metadata**
-   - Support target JSON fields for connection name/private scope if Shelllist needs them.
-   - Keep these out of the primary human CLI unless needed for testing/API transport.
+```bash
+nm-api networks [--cached] [--refresh-cache]
+nm-api scan [--stream] [--cache] [--strict] [--timeout <seconds>] [--retries <count>] [--ifname <iface>] [--ssid <ssid>...]
+nm-api connect <ssid> [--password-stdin] [--bssid <bssid>] [--hidden] [--key-mgmt <hint>] [--wep-key-type key|phrase]
+nm-api connect-target <target-json> [--password-stdin] [--wep-key-type key|phrase]
+nm-api saved
+nm-api profile delete <path>
+nm-api profile autoconnect <path> true|false
+nm-api profile mac-randomization <path> true|false
+nm-api profile share <path>
+nm-api profile send-hostname <path> true|false
+nm-api status
+nm-api disconnect
+nm-api connectivity
+```
 
-10. **Activation timeout parity**
-    - Use nmcli's 90 second connect timeout as the backend default.
-    - Allow target/API timeout override for Shelllist when needed.
+Deprecated compatibility accepted for now:
 
-## Implementation sequence
+- `--json` is accepted as a no-op while callers migrate.
+- `list` still exists as a compatibility alias for access-point listing, but is not Shelllist's primary API.
+- `diagnose` and `contract-fixture` are unstable/debug surfaces.
 
-Completed foundation:
+Removed from the supported frontend API:
 
-1. Added target/device identity fields and backend validation.
-2. Honor device path/interface constraints in visible AP lookup, hidden scan, saved activation, active-match polling, and nmcli fallback.
-3. Replaced visible saved-profile SSID-only matching with AP-compatible `AvailableConnections` matching.
-4. Added repeated targeted scan SSIDs and interface-constrained scans for Shelllist hidden-network flows.
-5. Raised activation/nmcli fallback timeout defaults toward nmcli's 90 seconds.
-6. Added AP JSON enrichment for channel, band, mode, bitrate, bandwidth, SSID hex, and WPA/RSN flag labels.
-7. Added password-aware saved-profile secret update before activation.
-8. Added grouped exact `access_points` to network entries so Shelllist can select a specific AP/BSSID/band/device while retaining grouped UI rows.
-9. Added target JSON connection metadata (`connection_name`/`name`, `private`) and thread it into D-Bus and nmcli fallback activation.
+- TSV/plain output.
+- `active` printing only the SSID.
+- `--password <secret>` argv transport.
+- Human-oriented command behavior.
 
-Completed current phase:
+## Stable Shelllist fields
 
-1. Upstreamed Shelllist's `--password-stdin` transport so UI prompts do not expose secrets through argv.
-2. Added machine-readable JSON failure reasons (`secret-required`, `authorization-required`, `unsupported-auth`, `validation-error`, `timeout`, `activation-failed`, `unknown`) and made JSON connect failures return a failing process status.
-3. Replaced string-based connect error classification with an internal typed `ConnectFailureReason` flow. Low-level D-Bus authorization/unsupported names and known activation paths map to typed reasons; unknown external failures remain `unknown`.
-4. Updated Shelllist to parse structured JSON stdout even when `nm-wifi connect* --json` exits nonzero.
-5. Suggest captive-portal UX only when NetworkManager connectivity reports portal/limited state.
-6. Use NetworkManager `AvailableConnections` plus AP/device/BSSID checks for live `networks --json` saved-profile enrichment.
-7. Stop mutating existing saved-profile secrets before activation when a caller supplies a password; prefer add-and-activate/new-profile flows that can be cleaned up on failure.
-8. Skip stale saved-profile activation in the `nmcli` fallback when a caller supplied a password.
-9. Added `auth` descriptors and `can_connect_with_credentials`/`needs_credentials` capability fields so enterprise networks are represented as credential-form work instead of permanent unsupported auth.
-10. Added an initial D-Bus WPA-Enterprise/802.1X creation path through `connect-target` `enterprise` credentials, including common EAP fields and `--password-stdin` password transport.
+These fields are considered frontend contract fields once emitted in v1 fixtures:
 
-Completed parity expansion:
+- Network/AP identity: `ssid`, `ssid_bytes`, `ssid_hex`, `path`, `bssid`.
+- Device identity: `device_path`, `device_iface`.
+- Grouping: `access_points`.
+- Saved profiles: `primary_profile`, `profiles`, profile `path`, `id`, `autoconnect`, `privacy`.
+- Capabilities: `can_connect`, `can_connect_now`, `can_connect_with_password`, `needs_password`, `can_connect_with_credentials`, `needs_credentials`, `supported_auth`, `unsupported_reason`.
+- Auth descriptors: `auth.kind`, `auth.key_management`, `auth.required_fields`, `auth.optional_fields`, `auth.note`.
+- Status: `active`, `access_point`, `network`, `profile`, `connectivity`, `ip4`, `wireless`, `metered`, `active_since_ms`.
+- Results: `result.status`, `result.message`, typed failure `reason`, `connectivity`, `suggest_open_portal`.
 
-1. Added `key_mgmt` target hints so hidden/ambiguous networks can explicitly request open, OWE, WPA-PSK, SAE, WEP, or enterprise settings instead of relying on hidden-network password guessing.
-2. Expanded 802.1X target coverage with additional CA/path, subject, OpenSSL cipher, PEAP/FAST phase1, and secret-flag fields.
-3. Added a saved-profile clone/add-and-activate path for password/credential-supplied visible networks, preserving compatible profile settings while replacing the relevant secret/security settings and avoiding mutation of the original profile.
-4. Added structured `profile` target metadata for advanced settings: autoconnect, priority, metered state, cloned MAC, DHCP hostname, IP method, static addresses, gateway, DNS servers, static routes, route metric, DNS-search, and ignore-auto-DNS.
-5. Improved unsupported-auth reporting with AP flag labels for clearer frontend/debug output.
+## Typed frontend error codes
+
+Use these codes at the Shelllist boundary:
+
+- `invalid-request`
+- `validation-error`
+- `secret-required`
+- `credentials-required`
+- `authorization-required`
+- `unsupported-auth`
+- `not-found`
+- `networkmanager-unavailable`
+- `timeout`
+- `activation-failed`
+- `disconnect-failed`
+- `internal-error`
+- `unknown` only for genuinely unclassified failures
+
+## Fixture/schema plan
+
+The existing contract fixture is now enveloped as `data.fixture`. Add per-method fixtures next:
+
+- `contracts/v1/wifi-networks.saved.json`
+- `contracts/v1/wifi-networks.password-required.json`
+- `contracts/v1/wifi-networks.enterprise-required.json`
+- `contracts/v1/wifi-status.active.json`
+- `contracts/v1/wifi-status.inactive.json`
+- `contracts/v1/wifi-connect.success.json`
+- `contracts/v1/wifi-connect.secret-required.json`
+- `contracts/v1/wifi-scan.stream.jsonl`
+- `contracts/v1/wifi-profile.share.json`
+
+Shelllist checks should validate envelopes and contract fields before runtime.
+
+## Migration status
+
+Started:
+
+1. Renamed project/binary/crate/docs references from `nm-wifi` to `nm-api`.
+2. Moved runtime cache/log paths to `$XDG_RUNTIME_DIR/nm-api` and `NM_API_*` logging environment variables.
+3. Removed `--password <secret>` from the CLI structs; stdin is the only secret transport.
+4. Removed the `active` command from the supported command enum.
+5. Made core API responses use the v1 envelope (`protocol`, `version`, `ok`, `data`, and typed `error` for connect failures).
+6. Updated Shelllist to invoke `nm-api` and unwrap v1 response envelopes.
+7. Updated the Shelllist contract check to validate the v1 envelope.
 
 Next:
 
-1. Teach Shelllist to render enterprise credential prompts/forms from `auth.required_fields`/`auth.optional_fields` and submit richer `enterprise` target metadata.
-2. Teach Shelllist/profile forms to emit `profile.ipv4/ipv6` static address/DNS/route metadata when users edit manual network settings.
-3. Improve saved-profile compatibility checks beyond `AvailableConnections` for cached/offline records where possible.
-4. Add more integration tests around connection metadata serialization, enterprise settings shape, and grouped AP output shape.
-5. Re-run `cargo fmt`, `cargo clippy`, `cargo test`, and `rust-quality-lens` after each phase.
-
-## Current transport CLI
-
-```bash
-nm-wifi list [--cached] [--json] [--refresh-cache]
-nm-wifi networks [--cached] [--json] [--refresh-cache]
-nm-wifi scan [--stream] [--cache] [--strict] [--timeout <seconds>] [--retries <count>] [--ifname <iface>] [--ssid <ssid>...]
-nm-wifi connect <ssid> [--password <secret>|--password-stdin] [--bssid <bssid>] [--hidden] [--key-mgmt <hint>] [--wep-key-type key|phrase] [--json]
-nm-wifi connect-target <target-json> [--password <secret>|--password-stdin] [--wep-key-type key|phrase] [--json]
-nm-wifi saved [--json]
-nm-wifi profile delete <path>
-nm-wifi profile autoconnect <path> true|false
-nm-wifi profile mac-randomization <path> true|false
-nm-wifi profile send-hostname <path> true|false
-nm-wifi status [--json]
-nm-wifi disconnect [--json]
-nm-wifi connectivity [--json]
-nm-wifi diagnose [--json]
-nm-wifi active
-```
-
-## Acceptance checks
-
-- Shelllist can call `nm-wifi networks --cached --json` and receive exact AP/device identity.
-- Shelllist can pass one network JSON object back to `connect-target` unchanged.
-- `connect-target` validates target identity and honors device/AP constraints.
-- Saved profile activation chooses AP-compatible profiles.
-- Password-supplied activation does not prefer stale saved secrets.
-- `nm-wifi scan --stream --cache` emits JSON Lines snapshots and updates cache files.
-- `nm-wifi status --json` reports active Wi-Fi details for frontends.
-- `nm-wifi diagnose --json` compares active-network/cache parity with nmcli for Shelllist regressions.
-- `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo test`, and `rust-quality-lens measure all --config rqlens.toml` pass.
+1. Move `diagnose` and `contract-fixture` under an explicit `debug` command namespace.
+2. Replace positional JSON for `connect-target` with stdin JSON while keeping a short compatibility window.
+3. Add per-method v1 fixtures and schema checks.
+4. Convert scan JSONL events to include protocol/version or a stream-specific v1 envelope.
+5. Tighten all errors into the frontend error-code set.
+6. Remove deprecated `--json` no-op flags and the `list` compatibility alias.
+7. Re-run formatting, clippy, tests, Shelllist contract checks, and rust-quality-lens after each phase.

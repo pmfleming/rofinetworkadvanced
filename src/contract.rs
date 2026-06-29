@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 
 use crate::model::{
@@ -17,10 +17,11 @@ struct ShelllistContractFixture {
 
 pub(crate) fn print_shelllist_contract_fixture() -> Result<()> {
     let fixture = shelllist_contract_fixture();
-    serde_json::to_writer_pretty(std::io::stdout(), &fixture)
-        .context("serialize Shelllist contract fixture")?;
-    println!();
-    Ok(())
+    crate::output::print_api_data(
+        "fixture",
+        &fixture,
+        "serialize Shelllist contract fixture response",
+    )
 }
 
 fn shelllist_contract_fixture() -> ShelllistContractFixture {

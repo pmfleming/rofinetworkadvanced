@@ -858,7 +858,7 @@ fn auth_capability_for(access_point: &AccessPoint, has_profile: bool) -> Network
         supported: false,
         required_fields: Vec::new(),
         optional_fields: Vec::new(),
-        note: Some("No nm-wifi creation path is known for this visible network yet".to_string()),
+        note: Some("No nm-api creation path is known for this visible network yet".to_string()),
     }
 }
 

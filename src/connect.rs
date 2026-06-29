@@ -268,6 +268,15 @@ fn nmcli_wifi_connect(
             ),
         ));
     }
+    if password.is_some() {
+        tracing::warn!(ssid = %target.ssid, "not running nmcli Wi-Fi connect fallback because it would expose the secret in process arguments");
+        return Err(connect_failure(
+            ConnectFailureReason::ActivationFailed,
+            format!(
+                "saved profile activation failed: {saved_err:#}; nmcli password fallback is disabled because secrets must not be passed through argv"
+            ),
+        ));
+    }
 
     let args = nmcli_wifi_connect_args(target, password, wep_key_type);
     nmcli(&args)

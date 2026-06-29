@@ -2,11 +2,15 @@ use std::io::{self, Write};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
+use serde_json::{Map, Value, json};
 
 use crate::model::{
-    AccessPoint, ConnectResult, ConnectivityStatus, DisconnectResult, NetworkEntry,
-    SavedWifiConnection, WifiSharePayload, WifiStatus,
+    AccessPoint, ConnectFailureReason, ConnectResult, ConnectivityStatus, DisconnectResult,
+    NetworkEntry, SavedWifiConnection, WifiSharePayload, WifiStatus,
 };
+
+pub(crate) const API_PROTOCOL: &str = "nm-api";
+pub(crate) const API_VERSION: u32 = 1;
 
 #[derive(Serialize)]
 #[serde(tag = "event", rename_all = "kebab-case")]
@@ -29,137 +33,121 @@ pub(crate) enum StreamOutput<'a> {
 }
 
 pub(crate) fn print_access_points_json(aps: &[AccessPoint]) -> Result<()> {
-    print_pretty_json(aps, "serialize AP JSON")
+    print_api_data("access_points", aps, "serialize AP response JSON")
 }
 
 pub(crate) fn print_network_entries_json(networks: &[NetworkEntry]) -> Result<()> {
-    print_pretty_json(networks, "serialize network JSON")
+    print_api_data("networks", networks, "serialize network response JSON")
 }
 
 pub(crate) fn print_saved_wifi_connections_json(profiles: &[SavedWifiConnection]) -> Result<()> {
-    print_pretty_json(profiles, "serialize saved Wi-Fi JSON")
+    print_api_data("profiles", profiles, "serialize saved Wi-Fi response JSON")
 }
 
-pub(crate) fn print_connect_result(result: &ConnectResult, json: bool) -> Result<()> {
-    print_text_or_json(
-        result,
-        json,
-        &result.message,
-        "serialize connect result JSON",
+pub(crate) fn print_connect_result(result: &ConnectResult, _json: bool) -> Result<()> {
+    if result.status == "error" {
+        let code = result
+            .reason
+            .as_ref()
+            .map(connect_failure_code)
+            .transpose()?
+            .unwrap_or_else(|| "unknown".to_string());
+        let error = json!({
+            "code": code,
+            "message": &result.message,
+            "details": {
+                "ssid": &result.ssid,
+                "result": result,
+            },
+        });
+        return print_api_error_with_data(
+            error,
+            "result",
+            result,
+            "serialize connect error response JSON",
+        );
+    }
+
+    print_api_data("result", result, "serialize connect response JSON")
+}
+
+pub(crate) fn print_connectivity(status: &ConnectivityStatus, _json: bool) -> Result<()> {
+    print_api_data(
+        "connectivity",
+        status,
+        "serialize connectivity response JSON",
     )
 }
 
-pub(crate) fn print_connectivity(status: &ConnectivityStatus, json: bool) -> Result<()> {
-    if json {
-        print_pretty_json(status, "serialize connectivity JSON")
-    } else {
-        println!("{}", status.state);
-        Ok(())
-    }
+pub(crate) fn print_wifi_status(status: &WifiStatus, _json: bool) -> Result<()> {
+    print_api_data("status", status, "serialize Wi-Fi status response JSON")
 }
 
-pub(crate) fn print_wifi_status(status: &WifiStatus, json: bool) -> Result<()> {
-    if json {
-        print_pretty_json(status, "serialize Wi-Fi status JSON")
-    } else {
-        if let Some(access_point) = &status.access_point {
-            println!("{}", access_point.ssid);
-        }
-        Ok(())
-    }
+pub(crate) fn print_wifi_share_payload(payload: &WifiSharePayload, _json: bool) -> Result<()> {
+    print_api_data("payload", payload, "serialize Wi-Fi share response JSON")
 }
 
-pub(crate) fn print_wifi_share_payload(payload: &WifiSharePayload, json: bool) -> Result<()> {
-    if json {
-        return print_pretty_json(payload, "serialize Wi-Fi share JSON");
-    }
-
-    if let Some(qr_payload) = &payload.qr_payload {
-        println!("{qr_payload}");
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "Wi-Fi profile is not shareable: {}",
-            payload.reason.as_deref().unwrap_or("unknown reason")
-        );
-    }
+pub(crate) fn print_disconnect_result(result: &DisconnectResult, _json: bool) -> Result<()> {
+    print_api_data("result", result, "serialize disconnect response JSON")
 }
 
-pub(crate) fn print_disconnect_result(result: &DisconnectResult, json: bool) -> Result<()> {
-    match json {
-        true => print_pretty_json(result, "serialize disconnect result JSON"),
-        false => {
-            println!("{}", result.message);
-            Ok(())
-        }
-    }
+pub(crate) fn print_api_message(message: &str) -> Result<()> {
+    print_api_data(
+        "result",
+        &json!({ "status": "ok", "message": message }),
+        "serialize API message JSON",
+    )
+}
+
+pub(crate) fn print_api_data<T: Serialize + ?Sized>(
+    key: &str,
+    value: &T,
+    context: &'static str,
+) -> Result<()> {
+    let mut data = Map::new();
+    data.insert(
+        key.to_string(),
+        serde_json::to_value(value).context(context)?,
+    );
+    let envelope = json!({
+        "protocol": API_PROTOCOL,
+        "version": API_VERSION,
+        "ok": true,
+        "data": data,
+    });
+    print_pretty_json(&envelope, context)
+}
+
+fn print_api_error_with_data<T: Serialize + ?Sized>(
+    error: Value,
+    key: &str,
+    value: &T,
+    context: &'static str,
+) -> Result<()> {
+    let mut data = Map::new();
+    data.insert(
+        key.to_string(),
+        serde_json::to_value(value).context(context)?,
+    );
+    let envelope = json!({
+        "protocol": API_PROTOCOL,
+        "version": API_VERSION,
+        "ok": false,
+        "error": error,
+        "data": data,
+    });
+    print_pretty_json(&envelope, context)
+}
+
+fn connect_failure_code(reason: &ConnectFailureReason) -> Result<String> {
+    let value = serde_json::to_value(reason).context("serialize connect failure reason")?;
+    Ok(value.as_str().unwrap_or("unknown").to_string())
 }
 
 fn print_pretty_json<T: Serialize + ?Sized>(value: &T, context: &'static str) -> Result<()> {
     let text = serde_json::to_string_pretty(value).context(context)?;
     println!("{text}");
     Ok(())
-}
-
-fn print_text_or_json<T: Serialize + ?Sized>(
-    value: &T,
-    json: bool,
-    text: &str,
-    context: &'static str,
-) -> Result<()> {
-    if json {
-        print_pretty_json(value, context)
-    } else {
-        println!("{text}");
-        Ok(())
-    }
-}
-
-pub(crate) fn print_saved_wifi_connections(profiles: &[SavedWifiConnection]) {
-    for profile in profiles {
-        println!(
-            "{}\t{}\t{}\t{}",
-            tsv_escape(&profile.id),
-            tsv_escape(&profile.ssid),
-            if profile.autoconnect {
-                "autoconnect"
-            } else {
-                "manual"
-            },
-            tsv_escape(&profile.path),
-        );
-    }
-}
-
-pub(crate) fn print_access_points(aps: &[AccessPoint]) {
-    for ap in aps {
-        println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            tsv_escape(&ap.ssid),
-            if ap.active { "*" } else { "" },
-            tsv_escape(&ap.security),
-            ap.strength,
-            ap.frequency,
-            tsv_escape(&ap.bssid),
-            ap.last_seen,
-        );
-    }
-}
-
-fn tsv_escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '\\' => escaped.push_str("\\\\"),
-            '\t' => escaped.push_str("\\t"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\0' => escaped.push_str("\\0"),
-            ch if ch.is_control() => escaped.push_str(&format!("\\x{:02x}", ch as u32)),
-            ch => escaped.push(ch),
-        }
-    }
-    escaped
 }
 
 pub(crate) fn emit_stream_event(event: &StreamOutput<'_>) -> Result<()> {
@@ -169,17 +157,4 @@ pub(crate) fn emit_stream_event(event: &StreamOutput<'_>) -> Result<()> {
     stdout.write_all(b"\n").context("write JSON newline")?;
     stdout.flush().context("flush JSON event")?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::tsv_escape;
-
-    #[test]
-    fn tsv_escape_preserves_row_shape() {
-        assert_eq!(
-            tsv_escape("Cafe\\Wi-Fi\tline\nnull\0\x1f"),
-            "Cafe\\\\Wi-Fi\\tline\\nnull\\0\\x1f"
-        );
-    }
 }

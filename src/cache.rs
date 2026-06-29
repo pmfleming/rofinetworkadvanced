@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{AccessPoint, ConnectionDetails, NetworkEntry, WifiStatus};
 
 const CACHE_VERSION: u32 = 1;
-const CACHE_DIR_NAME: &str = "nm-wifi";
+const CACHE_DIR_NAME: &str = "nm-api";
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -441,7 +441,7 @@ fn session_path() -> PathBuf {
 }
 
 pub(crate) fn log_path() -> PathBuf {
-    cache_dir().join("nm-wifi.log")
+    cache_dir().join("nm-api.log")
 }
 
 fn cache_dir() -> PathBuf {
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn temp_paths_are_unique_for_same_cache_path() {
-        let path = PathBuf::from("/tmp/nm-wifi/status.json");
+        let path = PathBuf::from("/tmp/nm-api/status.json");
 
         let first = temp_path_for(&path).expect("first temp path");
         let second = temp_path_for(&path).expect("second temp path");

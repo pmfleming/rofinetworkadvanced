@@ -1,4 +1,4 @@
-project_name = "nm-wifi"
+project_name = "nm-api"
 project_root = "."
 source_roots = ["src"]
 output_dir = "target/analysis"
