@@ -20,29 +20,27 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    /// List visible Wi-Fi access points as an nm-api JSON response.
-    List(ListOptions),
     /// List visible Wi-Fi networks enriched with saved-profile matches and capabilities.
     Networks(ListOptions),
     /// Request a scan, wait for completion, then emit an nm-api JSON response.
     Scan(ScanOptions),
     /// Connect to an SSID using NetworkManager D-Bus, with nmcli fallback for remaining edge cases.
     Connect(ConnectOptions),
-    /// Connect to an exact JSON target from `nm-api networks --json`.
+    /// Connect to an exact JSON target request read from stdin.
     ConnectTarget(ConnectTargetOptions),
     /// List saved Wi-Fi NetworkManager profiles.
-    Saved(JsonOutput),
+    Saved,
     /// Manage a saved Wi-Fi NetworkManager profile by D-Bus object path.
     Profile {
         #[command(subcommand)]
         command: ProfileCommand,
     },
     /// Show active Wi-Fi status and connection details.
-    Status(JsonOutput),
+    Status,
     /// Disconnect the active Wi-Fi connection, if any.
-    Disconnect(JsonOutput),
+    Disconnect,
     /// Check NetworkManager connectivity state.
-    Connectivity(JsonOutput),
+    Connectivity,
     /// Debug and unstable development probes.
     Debug {
         #[command(subcommand)]
@@ -53,16 +51,19 @@ pub(crate) enum Command {
 #[derive(Subcommand)]
 pub(crate) enum DebugCommand {
     /// Compare nm-api's active/cached Wi-Fi data with nmcli.
-    Diagnose(JsonOutput),
-    /// Print a stable JSON fixture for Shelllist contract tests.
+    Diagnose {
+        /// Emit JSON instead of debug text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the combined Shelllist contract fixture.
     ContractFixture,
+    /// Print per-method contract fixtures for API/schema checks.
+    ContractFixtures,
 }
 
 #[derive(Clone, Args)]
 pub(crate) struct ListOptions {
-    /// Deprecated no-op; nm-api emits JSON responses by default.
-    #[arg(long)]
-    pub(crate) json: bool,
     /// Use the latest cached live-scan snapshot if available.
     #[arg(long)]
     pub(crate) cached: bool,
@@ -118,65 +119,44 @@ pub(crate) struct ConnectOptions {
     /// Interpret password as a WEP key or WEP passphrase.
     #[arg(long, value_enum)]
     pub(crate) wep_key_type: Option<WepKeyType>,
-    /// Deprecated no-op; nm-api emits JSON responses by default.
-    #[arg(long)]
-    pub(crate) json: bool,
 }
 
 #[derive(Clone, Args)]
 pub(crate) struct ConnectTargetOptions {
-    /// Deprecated compatibility JSON object with ssid, ssid_bytes, ap_path/path, bssid, and hidden fields. Omit to read a request JSON object from stdin.
-    pub(crate) target_json: Option<String>,
-    /// Read the Wi-Fi password from the first line of stdin.
-    #[arg(long)]
-    pub(crate) password_stdin: bool,
     /// Interpret password as a WEP key or WEP passphrase.
     #[arg(long, value_enum)]
     pub(crate) wep_key_type: Option<WepKeyType>,
-    /// Deprecated no-op; nm-api emits JSON responses by default.
-    #[arg(long)]
-    pub(crate) json: bool,
-}
-
-#[derive(Clone, Args)]
-pub(crate) struct JsonOutput {
-    /// Deprecated no-op; nm-api emits JSON responses by default.
-    #[arg(long)]
-    pub(crate) json: bool,
 }
 
 #[derive(Subcommand)]
 pub(crate) enum ProfileCommand {
     /// Delete/forget a saved Wi-Fi profile.
     Delete {
-        /// NetworkManager settings object path, from `nm-api saved --json`.
+        /// NetworkManager settings object path, from `nm-api saved`.
         path: String,
     },
     /// Enable or disable autoconnect for a saved Wi-Fi profile.
     Autoconnect {
-        /// NetworkManager settings object path, from `nm-api saved --json`.
+        /// NetworkManager settings object path, from `nm-api saved`.
         path: String,
         /// true to enable autoconnect, false to disable it.
         enabled: bool,
     },
     /// Set per-profile Wi-Fi MAC privacy.
     MacRandomization {
-        /// NetworkManager settings object path, from `nm-api saved --json`.
+        /// NetworkManager settings object path, from `nm-api saved`.
         path: String,
         /// true uses a stable randomized MAC, false uses the device's permanent MAC.
         randomized: bool,
     },
     /// Build a standard Wi-Fi QR payload for a shareable saved profile.
     Share {
-        /// NetworkManager settings object path, from `nm-api saved --json`.
+        /// NetworkManager settings object path, from `nm-api saved`.
         path: String,
-        /// Deprecated no-op; nm-api emits JSON responses by default.
-        #[arg(long)]
-        json: bool,
     },
     /// Enable or disable sending this device's hostname through DHCP for a saved profile.
     SendHostname {
-        /// NetworkManager settings object path, from `nm-api saved --json`.
+        /// NetworkManager settings object path, from `nm-api saved`.
         path: String,
         /// true to send hostname, false to keep device name private.
         enabled: bool,

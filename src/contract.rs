@@ -1,10 +1,11 @@
 use anyhow::Result;
 use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::model::{
     AccessPoint, ConnectFailureReason, ConnectResult, ConnectivityStatus, Ip4Status, MeteredStatus,
     NetworkAuth, NetworkCapabilities, NetworkEntry, ProfilePrivacy, SavedWifiConnection,
-    WifiStatus, WirelessStatus, security_flags_label, security_label,
+    WifiSharePayload, WifiStatus, WirelessStatus, security_flags_label, security_label,
 };
 
 #[derive(Serialize)]
@@ -22,6 +23,50 @@ pub(crate) fn print_shelllist_contract_fixture() -> Result<()> {
         &fixture,
         "serialize Shelllist contract fixture response",
     )
+}
+
+pub(crate) fn print_method_contract_fixtures() -> Result<()> {
+    let fixtures = method_contract_fixtures();
+    crate::output::print_api_data(
+        "fixtures",
+        &fixtures,
+        "serialize method contract fixtures response",
+    )
+}
+
+fn method_contract_fixtures() -> Value {
+    let combined = shelllist_contract_fixture();
+    let password_network = password_required_network();
+    let enterprise_network = enterprise_required_network();
+    json!({
+        "wifi-networks.saved": {
+            "networks": [combined.network],
+        },
+        "wifi-networks.password-required": {
+            "networks": [password_network],
+        },
+        "wifi-networks.enterprise-required": {
+            "networks": [enterprise_network],
+        },
+        "wifi-status.active": {
+            "status": combined.status,
+        },
+        "wifi-status.inactive": {
+            "status": inactive_status(),
+        },
+        "wifi-connect.success": {
+            "result": combined.connect_success,
+        },
+        "wifi-connect.secret-required": {
+            "result": combined.connect_error,
+        },
+        "wifi-scan.stream": {
+            "events": scan_stream_events(),
+        },
+        "wifi-profile.share": {
+            "payload": share_payload(),
+        },
+    })
 }
 
 fn shelllist_contract_fixture() -> ShelllistContractFixture {
@@ -129,6 +174,134 @@ fn contract_access_point() -> AccessPoint {
     }
 }
 
+fn password_required_network() -> NetworkEntry {
+    let mut access_point = contract_access_point();
+    access_point.active = false;
+    NetworkEntry {
+        access_point: access_point.clone(),
+        access_points: vec![access_point],
+        primary_profile: None,
+        profiles: Vec::new(),
+        capabilities: NetworkCapabilities {
+            can_connect: true,
+            can_connect_now: false,
+            can_connect_with_password: true,
+            needs_password: true,
+            can_connect_with_credentials: false,
+            needs_credentials: false,
+            can_forget: false,
+            can_toggle_autoconnect: false,
+            supported_auth: true,
+            unsupported_reason: None,
+        },
+        auth: NetworkAuth {
+            kind: "password".to_string(),
+            key_management: vec!["wpa-psk".to_string()],
+            supported: true,
+            required_fields: vec!["password".to_string()],
+            optional_fields: Vec::new(),
+            note: Some("Provide a Wi-Fi password to connect".to_string()),
+        },
+        last_connection: None,
+    }
+}
+
+fn enterprise_required_network() -> NetworkEntry {
+    let mut access_point = contract_access_point();
+    access_point.active = false;
+    access_point.security = "Enterprise".to_string();
+    access_point.rsn_flags = crate::model::NM_AP_SEC_KEY_MGMT_802_1X;
+    access_point.rsn_flags_label = security_flags_label(access_point.rsn_flags);
+    NetworkEntry {
+        access_point: access_point.clone(),
+        access_points: vec![access_point],
+        primary_profile: None,
+        profiles: Vec::new(),
+        capabilities: NetworkCapabilities {
+            can_connect: true,
+            can_connect_now: false,
+            can_connect_with_password: false,
+            needs_password: false,
+            can_connect_with_credentials: true,
+            needs_credentials: true,
+            can_forget: false,
+            can_toggle_autoconnect: false,
+            supported_auth: true,
+            unsupported_reason: None,
+        },
+        auth: NetworkAuth {
+            kind: "enterprise".to_string(),
+            key_management: vec!["wpa-eap".to_string()],
+            supported: true,
+            required_fields: vec!["enterprise.identity".to_string(), "password".to_string()],
+            optional_fields: vec!["enterprise.anonymous_identity".to_string()],
+            note: Some("Provide enterprise credentials to connect".to_string()),
+        },
+        last_connection: None,
+    }
+}
+
+fn inactive_status() -> WifiStatus {
+    WifiStatus {
+        active: false,
+        device_iface: Some("wlan0".to_string()),
+        active_connection_path: None,
+        access_point: None,
+        network: None,
+        profile: None,
+        connectivity: Some(ConnectivityStatus::from_nm_code(1)),
+        ip4: None,
+        wireless: None,
+        metered: None,
+        active_since_ms: None,
+    }
+}
+
+fn scan_stream_events() -> Vec<Value> {
+    json!([
+        {
+            "protocol": crate::output::API_PROTOCOL,
+            "version": crate::output::API_VERSION,
+            "stream": "wifi-scan",
+            "event": "status",
+            "message": "Scanning Wi-Fi networks"
+        },
+        {
+            "protocol": crate::output::API_PROTOCOL,
+            "version": crate::output::API_VERSION,
+            "stream": "wifi-scan",
+            "event": "snapshot",
+            "scanning": true,
+            "networks_found": 1,
+            "networks": [password_required_network()]
+        },
+        {
+            "protocol": crate::output::API_PROTOCOL,
+            "version": crate::output::API_VERSION,
+            "stream": "wifi-scan",
+            "event": "complete",
+            "timed_out": false,
+            "networks_found": 1
+        }
+    ])
+    .as_array()
+    .cloned()
+    .unwrap_or_default()
+}
+
+fn share_payload() -> WifiSharePayload {
+    WifiSharePayload {
+        status: "ok",
+        shareable: true,
+        reason: None,
+        path: "/org/freedesktop/NetworkManager/Settings/1".to_string(),
+        id: "Example".to_string(),
+        ssid: "Example".to_string(),
+        auth_type: Some("WPA".to_string()),
+        qr_payload: Some("WIFI:T:WPA;S:Example;P:correct horse battery staple;;".to_string()),
+    }
+}
+
 fn contract_profile() -> SavedWifiConnection {
     SavedWifiConnection {
         path: "/org/freedesktop/NetworkManager/Settings/1".to_string(),
@@ -146,7 +319,7 @@ fn contract_profile() -> SavedWifiConnection {
 
 #[cfg(test)]
 mod tests {
-    use super::shelllist_contract_fixture;
+    use super::{method_contract_fixtures, shelllist_contract_fixture};
 
     #[test]
     fn shelllist_contract_fixture_contains_qml_boundary_fields() {
@@ -161,5 +334,27 @@ mod tests {
         assert_eq!(value["status"]["wireless"]["tx_bitrate_mbps"], 130.0);
         assert_eq!(value["connect_success"]["suggest_open_portal"], false);
         assert_eq!(value["connect_error"]["reason"], "secret-required");
+    }
+
+    #[test]
+    fn method_contract_fixtures_cover_frontend_api_shapes() {
+        let value = method_contract_fixtures();
+
+        assert!(value["wifi-networks.saved"]["networks"].is_array());
+        assert_eq!(
+            value["wifi-networks.password-required"]["networks"][0]["capabilities"]["needs_password"],
+            true
+        );
+        assert_eq!(
+            value["wifi-networks.enterprise-required"]["networks"][0]["capabilities"]["needs_credentials"],
+            true
+        );
+        assert_eq!(value["wifi-status.inactive"]["status"]["active"], false);
+        assert_eq!(
+            value["wifi-connect.secret-required"]["result"]["reason"],
+            "secret-required"
+        );
+        assert_eq!(value["wifi-scan.stream"]["events"][0]["protocol"], "nm-api");
+        assert_eq!(value["wifi-profile.share"]["payload"]["shareable"], true);
     }
 }

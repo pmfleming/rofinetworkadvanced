@@ -44,7 +44,7 @@ pub(crate) fn print_saved_wifi_connections_json(profiles: &[SavedWifiConnection]
     print_api_data("profiles", profiles, "serialize saved Wi-Fi response JSON")
 }
 
-pub(crate) fn print_connect_result(result: &ConnectResult, _json: bool) -> Result<()> {
+pub(crate) fn print_connect_result(result: &ConnectResult) -> Result<()> {
     if result.status == "error" {
         let code = result
             .reason
@@ -71,7 +71,7 @@ pub(crate) fn print_connect_result(result: &ConnectResult, _json: bool) -> Resul
     print_api_data("result", result, "serialize connect response JSON")
 }
 
-pub(crate) fn print_connectivity(status: &ConnectivityStatus, _json: bool) -> Result<()> {
+pub(crate) fn print_connectivity(status: &ConnectivityStatus) -> Result<()> {
     print_api_data(
         "connectivity",
         status,
@@ -79,15 +79,15 @@ pub(crate) fn print_connectivity(status: &ConnectivityStatus, _json: bool) -> Re
     )
 }
 
-pub(crate) fn print_wifi_status(status: &WifiStatus, _json: bool) -> Result<()> {
+pub(crate) fn print_wifi_status(status: &WifiStatus) -> Result<()> {
     print_api_data("status", status, "serialize Wi-Fi status response JSON")
 }
 
-pub(crate) fn print_wifi_share_payload(payload: &WifiSharePayload, _json: bool) -> Result<()> {
+pub(crate) fn print_wifi_share_payload(payload: &WifiSharePayload) -> Result<()> {
     print_api_data("payload", payload, "serialize Wi-Fi share response JSON")
 }
 
-pub(crate) fn print_disconnect_result(result: &DisconnectResult, _json: bool) -> Result<()> {
+pub(crate) fn print_disconnect_result(result: &DisconnectResult) -> Result<()> {
     print_api_data("result", result, "serialize disconnect response JSON")
 }
 

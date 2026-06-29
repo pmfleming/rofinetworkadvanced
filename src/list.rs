@@ -5,55 +5,11 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::nm::Nm;
-use crate::output::{print_access_points_json, print_network_entries_json};
+use crate::output::print_network_entries_json;
 use crate::{cache, model::AccessPoint};
-
-pub(crate) fn print_network_list(
-    _json: bool,
-    cached: bool,
-    refresh_cache: bool,
-    refresh_timeout: u64,
-    verbose: u8,
-    log_file: &Option<std::path::PathBuf>,
-) -> Result<()> {
-    tracing::info!(
-        cached,
-        refresh_cache,
-        refresh_timeout,
-        "listing Wi-Fi networks"
-    );
-
-    if cached {
-        if let Some(snapshot) = cache::read_snapshot()? {
-            let networks = snapshot.into_networks();
-            if refresh_cache {
-                spawn_cache_refresh(refresh_timeout, verbose, log_file.as_deref());
-            }
-            return print_networks(&networks);
-        }
-
-        if refresh_cache {
-            tracing::info!(
-                refresh_timeout,
-                "no cached scan exists; refreshing cache before listing"
-            );
-            let nm = Nm::new()?;
-            let networks = scan_and_cache(&nm, Duration::from_secs(refresh_timeout))?;
-            return print_networks(&networks);
-        }
-    }
-
-    let nm = Nm::new()?;
-    let networks = nm.list_access_points()?;
-    if refresh_cache {
-        spawn_cache_refresh(refresh_timeout, verbose, log_file.as_deref());
-    }
-    print_networks(&networks)
-}
 
 pub(crate) fn print_enriched_network_list(
     nm: &Nm,
-    _json: bool,
     cached: bool,
     refresh_cache: bool,
     refresh_timeout: u64,
@@ -72,10 +28,6 @@ pub(crate) fn print_enriched_network_list(
     let mut networks = nm.network_entries_for_access_points(access_points)?;
     cache::attach_connection_details(&mut networks);
     print_network_entries_json(&networks)
-}
-
-fn print_networks(networks: &[AccessPoint]) -> Result<()> {
-    print_access_points_json(networks)
 }
 
 fn load_networks(

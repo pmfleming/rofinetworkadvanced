@@ -34,13 +34,7 @@ pub(crate) fn connect_ssid(nm: &Nm, options: ConnectOptions) -> Result<()> {
         profile: Default::default(),
     };
     let password = resolve_password(options.password_stdin)?;
-    print_connect_attempt(
-        nm,
-        &target,
-        password.as_deref(),
-        options.wep_key_type,
-        options.json,
-    )
+    print_connect_attempt(nm, &target, password.as_deref(), options.wep_key_type)
 }
 
 pub(crate) fn connect_target(nm: &Nm, options: ConnectTargetOptions) -> Result<()> {
@@ -50,7 +44,6 @@ pub(crate) fn connect_target(nm: &Nm, options: ConnectTargetOptions) -> Result<(
         &request.target,
         request.password.as_deref(),
         request.wep_key_type,
-        request.json,
     )
 }
 
@@ -59,13 +52,12 @@ fn print_connect_attempt(
     target: &WifiConnectTarget,
     password: Option<&str>,
     wep_key_type: Option<WepKeyType>,
-    json: bool,
 ) -> Result<()> {
     match connect::connect_target_with_password(nm, target, password, wep_key_type) {
-        Ok(result) => print_connect_result(&result, json),
+        Ok(result) => print_connect_result(&result),
         Err(err) => {
             let result = connect_error(target, &err);
-            print_connect_result(&result, json)?;
+            print_connect_result(&result)?;
             Err(anyhow!("Wi-Fi connection failed: {}", result.message))
         }
     }
@@ -152,7 +144,7 @@ fn scan_ssid_bytes(ssids: Vec<String>) -> Result<Vec<Vec<u8>>> {
         .collect()
 }
 
-pub(crate) fn print_saved_profiles(nm: &Nm, _json: bool) -> Result<()> {
+pub(crate) fn print_saved_profiles(nm: &Nm) -> Result<()> {
     tracing::info!("listing saved Wi-Fi profiles");
     let profiles = nm.saved_wifi_connections()?;
     print_saved_wifi_connections_json(&profiles)
@@ -175,10 +167,10 @@ pub(crate) fn run_profile_command(nm: &Nm, command: ProfileCommand) -> Result<()
             nm.set_connection_mac_randomization_by_path(&path, randomized)?;
             print_api_message("Saved Wi-Fi profile MAC privacy updated")?;
         }
-        ProfileCommand::Share { path, json } => {
-            tracing::info!(path, json, "building saved Wi-Fi profile share payload");
+        ProfileCommand::Share { path } => {
+            tracing::info!(path, "building saved Wi-Fi profile share payload");
             let payload = nm.wifi_share_payload_by_path(&path)?;
-            print_wifi_share_payload(&payload, json)?;
+            print_wifi_share_payload(&payload)?;
         }
         ProfileCommand::SendHostname { path, enabled } => {
             tracing::info!(
@@ -193,20 +185,20 @@ pub(crate) fn run_profile_command(nm: &Nm, command: ProfileCommand) -> Result<()
     Ok(())
 }
 
-pub(crate) fn print_status(nm: &Nm, json: bool) -> Result<()> {
+pub(crate) fn print_status(nm: &Nm) -> Result<()> {
     let status = nm.wifi_status()?;
     cache_status_best_effort(&status);
-    print_wifi_status(&status, json)
+    print_wifi_status(&status)
 }
 
-pub(crate) fn disconnect(nm: &Nm, json: bool) -> Result<()> {
+pub(crate) fn disconnect(nm: &Nm) -> Result<()> {
     let result = nm.disconnect_wifi()?;
     clear_active_cache_best_effort();
-    print_disconnect_result(&result, json)
+    print_disconnect_result(&result)
 }
 
-pub(crate) fn print_connectivity_state(nm: &Nm, json: bool) -> Result<()> {
-    print_connectivity(&nm.connectivity_check()?, json)
+pub(crate) fn print_connectivity_state(nm: &Nm) -> Result<()> {
+    print_connectivity(&nm.connectivity_check()?)
 }
 
 fn cache_status_best_effort(status: &WifiStatus) {
@@ -234,27 +226,9 @@ struct ConnectTargetRequest {
     target: WifiConnectTarget,
     password: Option<String>,
     wep_key_type: Option<WepKeyType>,
-    json: bool,
 }
 
 fn connect_target_request(options: ConnectTargetOptions) -> Result<ConnectTargetRequest> {
-    if let Some(target_json) = options.target_json {
-        let target = parse_connect_target(&target_json)?;
-        let password = resolve_password(options.password_stdin)?;
-        return Ok(ConnectTargetRequest {
-            target,
-            password,
-            wep_key_type: options.wep_key_type,
-            json: options.json,
-        });
-    }
-
-    if options.password_stdin {
-        bail!(
-            "connect-target without a positional target reads stdin as JSON; include password in the request object instead of --password-stdin"
-        );
-    }
-
     let mut request_json = String::new();
     io::stdin()
         .read_to_string(&mut request_json)
@@ -269,22 +243,16 @@ fn connect_target_request(options: ConnectTargetOptions) -> Result<ConnectTarget
             target: request.target,
             password: request.password,
             wep_key_type: request.wep_key_type.or(options.wep_key_type),
-            json: options.json,
         }),
         Err(request_err) => match serde_json::from_str::<WifiConnectTarget>(request_json) {
             Ok(target) => Ok(ConnectTargetRequest {
                 target,
                 password: None,
                 wep_key_type: options.wep_key_type,
-                json: options.json,
             }),
             Err(target_err) => Err(target_err).context(format!(
                 "parse Wi-Fi connect target request JSON: {request_err}"
             )),
         },
     }
-}
-
-fn parse_connect_target(target_json: &str) -> Result<WifiConnectTarget> {
-    serde_json::from_str(target_json).context("parse Wi-Fi connect target JSON")
 }
