@@ -55,6 +55,18 @@ Secrets must use stdin (`wifi connect-target` request JSON or `wifi connect --pa
 
 Runtime files and logs live under `$XDG_RUNTIME_DIR/nm-api` by default. Logging environment variables are `NM_API_LOG_FILE`, `NM_API_LOG`, and `NM_API_STDERR_LOG`.
 
+Connection parity probe:
+
+```bash
+# Dry run: inventories visible candidates and writes a review log, but does not connect.
+nix run .#connectParityProbe
+
+# Destructive run: attempts each candidate with nm-api and nmcli, with progress on stderr.
+nix run .#connectParityProbe -- --execute --order alternate --skip-needs-secret
+```
+
+The probe writes `networks.json`, `attempts.jsonl`, `summary.json`, raw stdout/stderr, and nm-api request JSON under `$XDG_STATE_HOME/nm-api/connect-parity/<timestamp>` by default. See `tools/connect-parity-probe.sh --help` for options.
+
 Development:
 
 ```bash

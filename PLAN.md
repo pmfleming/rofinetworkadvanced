@@ -156,7 +156,9 @@ Started:
 13. Added top-level typed JSON error envelopes for unhandled command failures while avoiding duplicate connect-error reports.
 14. Re-ran rust-quality-lens `measure all` successfully.
 15. Reshaped stable commands into grouped namespaces: `wifi ...`, `network ...`, and `debug ...`.
+16. Added `nm-api-connect-parity-probe`, a simple command-line probe that compares `nm-api wifi connect-target` against `nmcli device wifi connect` across visible networks and writes progress plus JSONL/summary logs for review.
 
 Next:
 
-1. Expand request schemas beyond `connect-target` as new NetworkManager surfaces are added.
+1. Use connect parity probe runs to identify concrete nm-api-vs-nmcli activation gaps.
+2. Expand request schemas beyond `connect-target` as new NetworkManager surfaces are added.
